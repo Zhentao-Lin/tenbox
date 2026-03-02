@@ -1,0 +1,66 @@
+{
+  "nav": {
+    "github": "GitHub"
+  },
+  "hero": {
+    "title": "TenBox",
+    "taglines": [
+      "Your Local Lobster Farm",
+      "Hatch Cyber Lobsters in One Click",
+      "Give Your AI a Safe Shell",
+      "An Army of Claws at Your Command",
+      "No Ocean Needed, Just a Box",
+      "Farm Local, Keep Your Data Home"
+    ],
+    "description": "Create Agent VM instances with one click. Supports OpenClaw, CoPaw and other popular AI Agent projects. Simple GUI, no complex setup required.",
+    "cta": "Download Now",
+    "version": "v0.1.0",
+    "requirements": "Windows 10 (1803)+"
+  },
+  "features": {
+    "title": "Features",
+    "oneclick": {
+      "title": "One-Click Agent VM",
+      "desc": "Supports OpenClaw, CoPaw and other popular AI Agent projects. Pick an image and create a VM instance instantly."
+    },
+    "gui": {
+      "title": "Graphical Interface",
+      "desc": "Intuitive GUI — no command line needed, no complex installation process to learn."
+    },
+    "security": {
+      "title": "Secure Isolation",
+      "desc": "VM isolation ensures Agent exclusivity. Grant access only to authorized files, keeping your data safe."
+    },
+    "native": {
+      "title": "Native Virtualization",
+      "desc": "Built on Windows Hypervisor Platform (WHVP) with hardware-accelerated virtualization for excellent performance."
+    },
+    "virtio": {
+      "title": "High-Performance VirtIO",
+      "desc": "Display output, audio playback, shared folders, and bidirectional clipboard — a seamless experience."
+    },
+    "network": {
+      "title": "Networking",
+      "desc": "Built-in NAT networking, DHCP server, and port forwarding — works out of the box."
+    }
+  },
+  "howitworks": {
+    "title": "Get Started in 3 Steps",
+    "step1": {
+      "title": "Download & Install",
+      "desc": "Download the TenBox installer and install it on your Windows system."
+    },
+    "step2": {
+      "title": "Create an Agent VM",
+      "desc": "Pick an Agent image (OpenClaw / CoPaw), create a VM with one click."
+    },
+    "step3": {
+      "title": "Start Using",
+      "desc": "The VM starts automatically — use your Agent right from the graphical interface."
+    }
+  },
+  "footer": {
+    "copyright": "© 2026 TenClass. Open source under GPL v3.",
+    "github": "GitHub Repository"
+  }
+}
