@@ -15,7 +15,9 @@
     "description": "Create Agent VM instances with one click. Supports OpenClaw, CoPaw and other popular AI Agent projects. Simple GUI, no complex setup required.",
     "cta": "Download Now",
     "version": "v0.1.0",
-    "requirements": "Windows 10 (1803)+"
+    "requirements": "Windows 10 (1803)+",
+    "macos": "macOS version in development",
+    "notice": "⚠️ Code signing certificate pending — installer may show an unknown publisher warning"
   },
   "features": {
     "title": "Features",

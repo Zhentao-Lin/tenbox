@@ -15,7 +15,9 @@
     "description": "一键创建 Agent VM 实例，支持 OpenClaw、CoPaw 等主流 AI Agent 项目。图形界面操作，无需繁琐的安装过程。",
     "cta": "立即下载",
     "version": "v0.1.0",
-    "requirements": "Windows 10（1803）及以上"
+    "requirements": "Windows 10（1803）及以上",
+    "macos": "macOS 版本开发中",
+    "notice": "⚠️ 代码签名证书申请中，安装时可能会提示未知软件"
   },
   "features": {
     "title": "核心特性",

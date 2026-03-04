@@ -27,7 +27,8 @@
             {{ $t('hero.cta') }}
           </a>
         </div>
-        <p class="hero-meta">v{{ latestVersion }} · {{ $t('hero.requirements') }}</p>
+        <p class="hero-meta">v{{ latestVersion }} · {{ $t('hero.requirements') }} · {{ $t('hero.macos') }}</p>
+        <p class="hero-notice">{{ $t('hero.notice') }}</p>
       </div>
     </div>
   </section>
@@ -226,6 +227,12 @@ watch(locale, () => {
   margin-top: 16px;
   font-size: 0.85rem;
   color: rgba(241, 245, 249, 0.45);
+}
+
+.hero-notice {
+  margin-top: 10px;
+  font-size: 0.8rem;
+  color: rgba(251, 191, 36, 0.85);
 }
 
 .hero-image {
