@@ -7,6 +7,8 @@
 #include <windows.h>
 #include <commctrl.h>
 
+#include <shellapi.h>
+
 #include <array>
 #include <cstdio>
 #include <vector>
@@ -116,6 +118,7 @@ enum PfDlgId {
     IDC_PF_LIST   = 300,
     IDC_PF_ADD    = 301,
     IDC_PF_REMOVE = 302,
+    IDC_PF_OPEN   = 303,
 };
 
 struct PfDlgData {
@@ -270,15 +273,16 @@ static INT_PTR CALLBACK PfDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         col.mask = LVCF_TEXT | LVCF_WIDTH;
         col.cx = (list_w - 4) / 2;
         col.pszText = col_host.data();
-        ListView_InsertColumn(lv, 0, &col);
+        SendMessageW(lv, LVM_INSERTCOLUMNW, 0, reinterpret_cast<LPARAM>(&col));
         col.pszText = col_guest.data();
-        ListView_InsertColumn(lv, 1, &col);
+        SendMessageW(lv, LVM_INSERTCOLUMNW, 1, reinterpret_cast<LPARAM>(&col));
 
         data->listview = lv;
 
         int btn_x = gap + list_w + gap;
         MoveWindow(GetDlgItem(dlg, IDC_PF_ADD), btn_x, gap, btn_w, btn_h, FALSE);
         MoveWindow(GetDlgItem(dlg, IDC_PF_REMOVE), btn_x, gap + btn_h + btn_gap, btn_w, btn_h, FALSE);
+        MoveWindow(GetDlgItem(dlg, IDC_PF_OPEN), btn_x, gap + (btn_h + btn_gap) * 2, btn_w, btn_h, FALSE);
 
         PfRefreshList(data);
         return TRUE;
@@ -291,6 +295,22 @@ static INT_PTR CALLBACK PfDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
                 PfRefreshList(data);
             }
             return TRUE;
+
+        case IDC_PF_OPEN: {
+            int sel = ListView_GetNextItem(data->listview, -1, LVNI_SELECTED);
+            if (sel >= 0) {
+                wchar_t port_buf[16]{};
+                LVITEMW lvi{};
+                lvi.iSubItem = 0;
+                lvi.pszText = port_buf;
+                lvi.cchTextMax = static_cast<int>(std::size(port_buf));
+                SendMessageW(data->listview, LVM_GETITEMTEXTW, sel, reinterpret_cast<LPARAM>(&lvi));
+                wchar_t url[64];
+                swprintf_s(url, L"http://localhost:%s", port_buf);
+                ShellExecuteW(dlg, L"open", url, nullptr, nullptr, SW_SHOWNORMAL);
+            }
+            return TRUE;
+        }
 
         case IDC_PF_REMOVE: {
             int sel = ListView_GetNextItem(data->listview, -1, LVNI_SELECTED);
@@ -351,6 +371,7 @@ void ShowPortForwardsDialog(HWND parent, ManagerService& mgr, const std::string&
     int btn_h = 14, btn_w = 50;
     b.AddButton(IDC_PF_ADD, i18n::tr(S::kPfBtnAdd), 0, 0, btn_w, btn_h);
     b.AddButton(IDC_PF_REMOVE, i18n::tr(S::kPfBtnRemove), 0, 0, btn_w, btn_h);
+    b.AddButton(IDC_PF_OPEN, i18n::tr(S::kPfBtnOpen), 0, 0, btn_w, btn_h);
 
     PfDlgData data{&mgr, vm_id, nullptr};
     DialogBoxIndirectParamW(GetModuleHandle(nullptr), b.Build(), parent,

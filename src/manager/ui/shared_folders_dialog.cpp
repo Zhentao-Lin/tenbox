@@ -8,6 +8,8 @@
 #include <windows.h>
 #include <commctrl.h>
 
+#include <shellapi.h>
+
 #include <array>
 #include <string>
 
@@ -15,6 +17,7 @@ enum SfDlgId {
     IDC_SF_LIST    = 300,
     IDC_SF_ADD     = 301,
     IDC_SF_REMOVE  = 302,
+    IDC_SF_OPEN    = 303,
 };
 
 struct SfDlgData {
@@ -80,20 +83,21 @@ static INT_PTR CALLBACK SfDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         col.mask = LVCF_TEXT | LVCF_WIDTH;
         col.cx = 110;
         col.pszText = col_tag.data();
-        ListView_InsertColumn(lv, 0, &col);
+        SendMessageW(lv, LVM_INSERTCOLUMNW, 0, reinterpret_cast<LPARAM>(&col));
         col.cx = list_w - 110 - 90 - 4;
         if (col.cx < 80) col.cx = 80;
         col.pszText = col_path.data();
-        ListView_InsertColumn(lv, 1, &col);
+        SendMessageW(lv, LVM_INSERTCOLUMNW, 1, reinterpret_cast<LPARAM>(&col));
         col.cx = 90;
         col.pszText = col_mode.data();
-        ListView_InsertColumn(lv, 2, &col);
+        SendMessageW(lv, LVM_INSERTCOLUMNW, 2, reinterpret_cast<LPARAM>(&col));
 
         data->listview = lv;
 
         int btn_x = gap + list_w + gap;
         MoveWindow(GetDlgItem(dlg, IDC_SF_ADD),    btn_x, gap,                          btn_w, btn_h, FALSE);
         MoveWindow(GetDlgItem(dlg, IDC_SF_REMOVE), btn_x, gap + btn_h + btn_gap,        btn_w, btn_h, FALSE);
+        MoveWindow(GetDlgItem(dlg, IDC_SF_OPEN),   btn_x, gap + (btn_h + btn_gap) * 2,  btn_w, btn_h, FALSE);
 
         SfRefreshList(data);
         return TRUE;
@@ -121,6 +125,19 @@ static INT_PTR CALLBACK SfDlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
                     MessageBoxW(dlg, i18n::to_wide(error).c_str(),
                         i18n::tr_w(i18n::S::kError).c_str(), MB_OK | MB_ICONERROR);
                 }
+            }
+            return TRUE;
+        }
+        case IDC_SF_OPEN: {
+            int sel = ListView_GetNextItem(data->listview, -1, LVNI_SELECTED);
+            if (sel >= 0) {
+                wchar_t path_buf[MAX_PATH]{};
+                LVITEMW lvi{};
+                lvi.iSubItem = 1;
+                lvi.pszText = path_buf;
+                lvi.cchTextMax = static_cast<int>(std::size(path_buf));
+                SendMessageW(data->listview, LVM_GETITEMTEXTW, sel, reinterpret_cast<LPARAM>(&lvi));
+                ShellExecuteW(dlg, L"open", path_buf, nullptr, nullptr, SW_SHOWNORMAL);
             }
             return TRUE;
         }
@@ -172,6 +189,7 @@ void ShowSharedFoldersDialog(HWND parent, ManagerService& mgr, const std::string
     int btn_h = 14, btn_w = 50;
     b.AddButton(IDC_SF_ADD,    i18n::tr(S::kSfBtnAdd),    0, 0, btn_w, btn_h);
     b.AddButton(IDC_SF_REMOVE, i18n::tr(S::kSfBtnRemove), 0, 0, btn_w, btn_h);
+    b.AddButton(IDC_SF_OPEN,   i18n::tr(S::kSfBtnOpen),   0, 0, btn_w, btn_h);
 
     SfDlgData data{&mgr, vm_id, nullptr};
     DialogBoxIndirectParamW(GetModuleHandle(nullptr), b.Build(), parent,

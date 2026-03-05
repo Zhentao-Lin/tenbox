@@ -108,6 +108,10 @@ struct DialogData {
     int last_progress_ui_file_index;
     int last_progress_ui_percent;
 
+    DWORD speed_sample_tick;
+    uint64_t speed_sample_bytes;
+    double smooth_speed_bps;
+
     DialogData() : mgr(nullptr), dlg(nullptr), current_page(Page::kSelectImage),
                    created(false), closed(false),
                    sources_loaded(false), loading_sources(false), selected_source_index(-1),
@@ -116,7 +120,8 @@ struct DialogData {
                    current_file_index(0), total_files(0),
                    current_downloaded(0), current_total(0),
                    last_progress_ui_tick(0), last_progress_ui_file_index(-1),
-                   last_progress_ui_percent(-1) {}
+                   last_progress_ui_percent(-1),
+                   speed_sample_tick(0), speed_sample_bytes(0), smooth_speed_bps(0) {}
 };
 
 static std::string NextAgentName(const std::vector<VmRecord>& records) {
@@ -145,6 +150,37 @@ static std::string FormatSize(uint64_t bytes) {
             static_cast<unsigned long long>(bytes), kUnits[unit]);
     } else {
         snprintf(buf, sizeof(buf), "%.1f %s", value, kUnits[unit]);
+    }
+    return std::string(buf);
+}
+
+static std::string FormatSpeed(double bytes_per_sec) {
+    if (bytes_per_sec < 1.0) return "";
+    static const char* kUnits[] = {"B/s", "KB/s", "MB/s", "GB/s"};
+    int unit = 0;
+    while (bytes_per_sec >= 1024.0 && unit < 3) {
+        bytes_per_sec /= 1024.0;
+        ++unit;
+    }
+    char buf[64];
+    if (unit == 0) {
+        snprintf(buf, sizeof(buf), "%.0f %s", bytes_per_sec, kUnits[unit]);
+    } else {
+        snprintf(buf, sizeof(buf), "%.1f %s", bytes_per_sec, kUnits[unit]);
+    }
+    return std::string(buf);
+}
+
+static std::string FormatEta(double seconds) {
+    if (seconds < 0 || seconds > 359999) return "";
+    int s = static_cast<int>(seconds + 0.5);
+    char buf[64];
+    if (s < 60) {
+        snprintf(buf, sizeof(buf), "%ds", s);
+    } else if (s < 3600) {
+        snprintf(buf, sizeof(buf), "%dm%02ds", s / 60, s % 60);
+    } else {
+        snprintf(buf, sizeof(buf), "%dh%02dm", s / 3600, (s % 3600) / 60);
     }
     return std::string(buf);
 }
@@ -465,6 +501,9 @@ static void StartDownload(DialogData* data) {
     data->last_progress_ui_tick = 0;
     data->last_progress_ui_file_index = -1;
     data->last_progress_ui_percent = -1;
+    data->speed_sample_tick = GetTickCount();
+    data->speed_sample_bytes = 0;
+    data->smooth_speed_bps = 0;
 
     HWND dlg = data->dlg;
     data->download_thread = std::thread([data, dlg]() {
@@ -572,20 +611,47 @@ static LRESULT CALLBACK DlgSubclassProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
             if (percent_changed && elapsed < 90) return 0;
         }
 
+        if (file_changed) {
+            data->speed_sample_tick = now;
+            data->speed_sample_bytes = 0;
+            data->smooth_speed_bps = 0;
+        }
+
         data->last_progress_ui_tick = now;
         data->last_progress_ui_file_index = data->current_file_index;
         data->last_progress_ui_percent = file_progress;
         SendMessage(GetDlgItem(dlg, IDC_PROGRESS), PBM_SETPOS, file_progress, 0);
 
+        DWORD speed_elapsed = now - data->speed_sample_tick;
+        if (speed_elapsed >= 1000 && data->current_downloaded > data->speed_sample_bytes) {
+            double instant = static_cast<double>(data->current_downloaded - data->speed_sample_bytes)
+                             / (speed_elapsed / 1000.0);
+            constexpr double kAlpha = 0.3;
+            data->smooth_speed_bps = (data->smooth_speed_bps < 1.0)
+                ? instant
+                : data->smooth_speed_bps * (1.0 - kAlpha) + instant * kAlpha;
+            data->speed_sample_tick = now;
+            data->speed_sample_bytes = data->current_downloaded;
+        }
+
         char buf[512];
         snprintf(buf, sizeof(buf), i18n::tr(i18n::S::kImgDownloadingFile),
                  data->current_file_index + 1, data->total_files, data->current_file_name.c_str());
         std::string text = buf;
-        text += " - " + std::to_string(file_progress) + "%";
+        text += "\n" + std::to_string(file_progress) + "%";
         if (data->current_total > 0) {
-            text += " (" + FormatSize(data->current_downloaded) + " / " + FormatSize(data->current_total) + ")";
+            text += "  " + FormatSize(data->current_downloaded) + " / " + FormatSize(data->current_total);
         } else if (data->current_downloaded > 0) {
-            text += " (" + FormatSize(data->current_downloaded) + ")";
+            text += "  " + FormatSize(data->current_downloaded);
+        }
+        if (data->smooth_speed_bps > 0) {
+            text += "  " + FormatSpeed(data->smooth_speed_bps);
+            if (data->current_total > data->current_downloaded) {
+                double remaining = static_cast<double>(data->current_total - data->current_downloaded)
+                                   / data->smooth_speed_bps;
+                std::string eta = FormatEta(remaining);
+                if (!eta.empty()) text += "  " + i18n::fmt(i18n::S::kImgEta, eta.c_str());
+            }
         }
         SetDlgItemTextW(dlg, IDC_PROGRESS_TEXT, i18n::to_wide(text).c_str());
         return 0;

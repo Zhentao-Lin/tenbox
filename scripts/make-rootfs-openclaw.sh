@@ -135,6 +135,7 @@ STEPS=(
     "install_usertools"
     "install_nodejs"
     "install_openclaw"
+    "config_openclaw"
     "config_locale"
     "config_services"
     "config_virtio_gpu"
@@ -164,6 +165,7 @@ STEP_DESCRIPTIONS=(
     "Install user tools (Chromium, etc.)"
     "Install Node.js 22"
     "Install OpenClaw"
+    "Configure OpenClaw (tools, daemon)"
     "Configure locale"
     "Configure systemd services"
     "Configure virtio-gpu resize"
@@ -204,7 +206,7 @@ fi
 if $FORCE_REBUILD; then
     echo "Force rebuild: clearing all checkpoints and work directory..."
     rm -f "$CHECKPOINT_DIR"/*.done
-    rm -rf "$WORK_DIR"
+    sudo rm -rf "$WORK_DIR"
 fi
 
 # Clear checkpoints from specified step onwards
@@ -243,7 +245,7 @@ cleanup() {
     fi
     # Don't remove WORK_DIR on failure so we can resume
     if [ "${BUILD_SUCCESS:-false}" = "true" ]; then
-        rm -rf "$WORK_DIR"
+        sudo rm -rf "$WORK_DIR"
     else
         echo "Work directory preserved for resume: $WORK_DIR"
     fi
@@ -568,24 +570,44 @@ do_install_openclaw() {
     fi
     sudo cp "$CACHE_OPENCLAW" "$MOUNT_DIR/tmp/openclaw_install.sh"
     
-    sudo chroot "$MOUNT_DIR" /bin/bash -e << 'EOF'
-if command -v openclaw &>/dev/null; then
+    sudo chroot "$MOUNT_DIR" /bin/bash -e << EOF
+if su - $USER_NAME -c 'command -v openclaw' &>/dev/null; then
     echo "  OpenClaw already installed"
     exit 0
 fi
 echo "Installing OpenClaw..."
-bash /tmp/openclaw_install.sh --no-onboard
+su - $USER_NAME -c 'bash /tmp/openclaw_install.sh --no-onboard'
 rm -f /tmp/openclaw_install.sh
+
 EOF
 
     # Extract version for output filename
-    OPENCLAW_VERSION=$(sudo chroot "$MOUNT_DIR" npm ls -g openclaw 2>/dev/null \
-        | grep 'openclaw@' | sed 's/.*openclaw@//' || true)
+    OPENCLAW_VERSION=$(sudo chroot "$MOUNT_DIR" su - "$USER_NAME" -c \
+        'npm ls -g openclaw 2>/dev/null' | grep 'openclaw@' | sed 's/.*openclaw@//' || true)
     if [ -n "$OPENCLAW_VERSION" ]; then
         echo "  OpenClaw version: $OPENCLAW_VERSION"
     else
         echo "  WARNING: Could not detect OpenClaw version"
     fi
+}
+
+do_config_openclaw() {
+    sudo chroot "$MOUNT_DIR" /bin/bash -e << EOF
+if [ -f /home/$USER_NAME/.openclaw/openclaw.json ] && \
+   grep -q '"profile"' /home/$USER_NAME/.openclaw/openclaw.json 2>/dev/null; then
+    echo "  OpenClaw already configured"
+    exit 0
+fi
+
+echo "Configuring OpenClaw..."
+su - $USER_NAME -c 'openclaw config set tools.profile full'
+su - $USER_NAME -c 'openclaw config set gateway.bind lan'
+su - $USER_NAME -c 'openclaw config set gateway.auth.mode token'
+su - $USER_NAME -c 'openclaw config set gateway.auth.token tenbox'
+su - $USER_NAME -c 'openclaw config set gateway.controlUi.allowInsecureAuth true'
+su - $USER_NAME -c 'openclaw config set gateway.controlUi.dangerouslyDisableDeviceAuth true'
+su - $USER_NAME -c 'openclaw daemon install'
+EOF
 }
 
 do_config_locale() {
@@ -749,8 +771,8 @@ EOF
 do_cleanup_chroot() {
     # Detect version from chroot if not already known (e.g. on resume)
     if [ -z "$OPENCLAW_VERSION" ]; then
-        OPENCLAW_VERSION=$(sudo chroot "$MOUNT_DIR" npm ls -g openclaw 2>/dev/null \
-            | grep 'openclaw@' | sed 's/.*openclaw@//' || true)
+        OPENCLAW_VERSION=$(sudo chroot "$MOUNT_DIR" su - "$USER_NAME" -c \
+            'npm ls -g openclaw 2>/dev/null' | grep 'openclaw@' | sed 's/.*openclaw@//' || true)
         [ -n "$OPENCLAW_VERSION" ] && echo "  Detected OpenClaw version: $OPENCLAW_VERSION"
     fi
 
@@ -820,6 +842,7 @@ run_step "install_ibus"   "Installing IBus"           do_install_ibus
 run_step "install_usertools" "Installing user tools"  do_install_usertools
 run_step "install_nodejs" "Installing Node.js"        do_install_nodejs
 run_step "install_openclaw" "Installing OpenClaw"     do_install_openclaw
+run_step "config_openclaw" "Configuring OpenClaw"     do_config_openclaw
 run_step "config_locale"  "Configuring locale"        do_config_locale
 run_step "config_services" "Configuring services"     do_config_services
 run_step "config_virtio_gpu" "Configuring virtio-gpu" do_config_virtio_gpu

@@ -174,6 +174,7 @@ enum class S {
     kSfColMode,
     kSfBtnAdd,
     kSfBtnRemove,
+    kSfBtnOpen,
     kSfModeReadOnly,
     kSfModeReadWrite,
     kSfBrowseTitle,
@@ -187,6 +188,7 @@ enum class S {
     kPfColGuestPort,
     kPfBtnAdd,
     kPfBtnRemove,
+    kPfBtnOpen,
     kPfNoSelection,
     kPfConfirmRemoveTitle,
     kPfConfirmRemoveMsg,
@@ -221,6 +223,7 @@ enum class S {
     kImgConfirmDeleteCacheMsg,
     kImgCacheDeleted,
     kImgCacheDeleteFailed,
+    kImgEta,
 
     // Auto-update
     kUpdateAvailableTitle,
