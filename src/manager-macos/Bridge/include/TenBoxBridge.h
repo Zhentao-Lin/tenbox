@@ -14,7 +14,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) NSInteger memoryMb;
 @property (nonatomic, assign) NSInteger cpuCount;
 @property (nonatomic, copy) NSString *state;
-@property (nonatomic, assign) BOOL netLinkUp;
+@property (nonatomic, assign) BOOL netEnabled;
+@property (nonatomic, copy) NSString *cmdline;
 @end
 
 @interface TBVmCreateConfig : NSObject
@@ -32,6 +33,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (NSArray<TBVmInfo *> *)getVmList;
 - (BOOL)createVmWithConfig:(TBVmCreateConfig *)config;
+- (BOOL)editVmWithId:(NSString *)vmId name:(NSString *)name memoryMb:(NSInteger)memoryMb cpuCount:(NSInteger)cpuCount netEnabled:(BOOL)netEnabled;
 - (BOOL)deleteVmWithId:(NSString *)vmId;
 - (BOOL)startVmWithId:(NSString *)vmId;
 - (BOOL)stopVmWithId:(NSString *)vmId;

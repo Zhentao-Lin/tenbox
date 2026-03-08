@@ -140,10 +140,12 @@ private:
     std::condition_variable send_cv_;
     std::deque<std::string> console_queue_;
 
-    // Bounded queue for display frames. Preserves dirty-rect ordering
-    // but caps memory usage.
-    static constexpr size_t kMaxPendingFrames = 8;
+    // Bounded queue for display frames.  When overflow occurs, all older
+    // frames are discarded and only the newest is kept.
+    static constexpr size_t kMaxPendingFrames = 4;
     std::deque<std::string> frame_queue_;
+    uint64_t frame_drop_count_ = 0;
+    std::chrono::steady_clock::time_point last_frame_drop_log_{};
 
     // Bounded queue for audio PCM chunks.
     static constexpr size_t kMaxPendingAudio = 32;

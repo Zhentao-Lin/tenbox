@@ -182,9 +182,15 @@ VCpuExitAction HvfVCpu::HandleException() {
         return VCpuExitAction::kContinue;
 
     case kEcBrk:
-        LOG_ERROR("hvf: vCPU %u BRK exception (syndrome=0x%llx)",
-                  index_, (unsigned long long)syndrome);
-        return VCpuExitAction::kError;
+    {
+        uint16_t imm = syndrome & 0xFFFF;
+        LOG_WARN("hvf: vCPU %u BRK #%u (syndrome=0x%llx) — skipping",
+                 index_, imm, (unsigned long long)syndrome);
+        uint64_t pc;
+        hv_vcpu_get_reg(vcpu_, HV_REG_PC, &pc);
+        hv_vcpu_set_reg(vcpu_, HV_REG_PC, pc + 4);
+        return VCpuExitAction::kContinue;
+    }
 
     default:
         LOG_ERROR("hvf: vCPU %u unhandled EC=0x%02x (syndrome=0x%llx, "

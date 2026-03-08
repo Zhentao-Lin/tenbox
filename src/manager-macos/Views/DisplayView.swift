@@ -6,36 +6,42 @@ struct DisplayView: View {
     @StateObject private var viewModel = DisplayViewModel()
 
     var body: some View {
-        ZStack {
-            MetalDisplayViewWrapper(
-                renderer: session.renderer,
-                inputHandler: viewModel.inputHandler
-            )
-            .aspectRatio(session.displayAspect, contentMode: .fit)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black)
-            .background(GeometryReader { geo in
-                Color.clear.onChange(of: geo.size) { _, newSize in
-                    viewModel.displaySizeChanged(newSize, client: session.ipcClient)
-                }
+        GeometryReader { geo in
+            ZStack {
+                MetalDisplayViewWrapper(
+                    renderer: session.renderer,
+                    inputHandler: viewModel.inputHandler,
+                    guestCursor: viewModel.guestCursor
+                )
+                .aspectRatio(session.displayAspect, contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
                 .onAppear {
+                    viewModel.attach(to: session)
+                }
+                .onDisappear {
+                    viewModel.detach()
+                }
+
+                if !session.connected {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        Text("Waiting for display...")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .onChange(of: geo.size) { _, newSize in
+                viewModel.displaySizeChanged(newSize, client: session.ipcClient)
+            }
+            .onChange(of: session.connected) { _, connected in
+                if connected {
                     viewModel.displaySizeChanged(geo.size, client: session.ipcClient)
                 }
-            })
+            }
             .onAppear {
-                viewModel.attach(to: session)
-            }
-            .onDisappear {
-                viewModel.detach()
-            }
-
-            if !session.connected {
-                VStack(spacing: 12) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                    Text("Waiting for display...")
-                        .foregroundStyle(.secondary)
-                }
+                viewModel.displaySizeChanged(geo.size, client: session.ipcClient)
             }
         }
     }
@@ -43,6 +49,7 @@ struct DisplayView: View {
 
 class DisplayViewModel: ObservableObject {
     let inputHandler = InputHandler()
+    @Published var guestCursor: NSCursor?
 
     private let clipboardHandler = ClipboardHandler()
     private var resizeTimer: Timer?
@@ -51,6 +58,7 @@ class DisplayViewModel: ObservableObject {
     func attach(to session: VmSession) {
         self.session = session
         setupInputHandler(client: session.ipcClient)
+        setupCursorHandler(client: session.ipcClient)
         setupClipboard(client: session.ipcClient)
     }
 
@@ -63,12 +71,17 @@ class DisplayViewModel: ObservableObject {
 
     func displaySizeChanged(_ size: CGSize, client: IpcClientWrapper) {
         resizeTimer?.invalidate()
-        resizeTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak client] _ in
-            guard let client = client, client.isConnected else { return }
-            var w = UInt32(size.width)
-            let h = UInt32(size.height)
+        resizeTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak client] _ in
+            guard let client = client, client.isConnected else {
+                print("[DisplayView] resize ignored: client disconnected")
+                return
+            }
+            let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+            var w = UInt32(size.width * scale)
+            let h = UInt32(size.height * scale)
             w = (w + 7) & ~7
             if w > 0 && h > 0 {
+                print("[DisplayView] sending display.set_size \(w)x\(h) (view: \(size.width)x\(size.height), scale: \(scale))")
                 client.sendDisplaySetSize(width: w, height: h)
             }
         }
@@ -89,6 +102,56 @@ class DisplayViewModel: ObservableObject {
             guard let client = client, client.isConnected else { return }
             client.sendScroll(delta: delta)
         }
+    }
+
+    private func setupCursorHandler(client: IpcClientWrapper) {
+        client.onCursor = { [weak self] visible, imageUpdated, w, h, hotX, hotY, pixels in
+            guard let self = self else { return }
+            if !visible {
+                self.guestCursor = NSCursor(image: NSImage(size: NSSize(width: 1, height: 1)),
+                                            hotSpot: .zero)
+                return
+            }
+            guard imageUpdated, w > 0, h > 0, let pixels = pixels else { return }
+            if let cursor = Self.buildNSCursor(width: w, height: h,
+                                               hotX: hotX, hotY: hotY,
+                                               pixelData: pixels) {
+                self.guestCursor = cursor
+            }
+        }
+    }
+
+    private static func buildNSCursor(width: UInt32, height: UInt32,
+                                       hotX: UInt32, hotY: UInt32,
+                                       pixelData: Data) -> NSCursor? {
+        let w = Int(width)
+        let h = Int(height)
+        let expectedSize = w * h * 4
+        guard pixelData.count >= expectedSize else { return nil }
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let provider = CGDataProvider(data: pixelData as CFData) else { return nil }
+        // Pixels from virtio-gpu are B8G8R8A8 in memory (BGRA byte order).
+        // On little-endian, a 32-bit word reads as 0xAARRGGBB, so
+        // byteOrder32Little + noneSkipFirst gives us [skip][R][G][B] in
+        // the 32-bit word = B,G,R,A bytes in memory.
+        guard let cgImage = CGImage(
+            width: w,
+            height: h,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: w * 4,
+            space: colorSpace,
+            bitmapInfo: CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue |
+                                    CGImageAlphaInfo.premultipliedFirst.rawValue),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        ) else { return nil }
+
+        let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: w, height: h))
+        return NSCursor(image: nsImage, hotSpot: NSPoint(x: Int(hotX), y: Int(hotY)))
     }
 
     private func setupClipboard(client: IpcClientWrapper) {
@@ -165,6 +228,7 @@ class DisplayViewModel: ObservableObject {
 
 class InputMTKView: MTKView {
     var inputHandler: InputHandler?
+    var customCursor: NSCursor?
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -281,11 +345,22 @@ class InputMTKView: MTKView {
         inputHandler?.handleMouseMoved(absX: x, absY: y)
     }
 
+    private var lastScrollTime: Double = 0.0
+    private static let scrollMinInterval: Double = 0.1
+    private static let scrollDivisor: CGFloat = 30.0
+
     override func scrollWheel(with event: NSEvent) {
-        let delta = Int32(event.scrollingDeltaY)
-        if delta != 0 {
-            inputHandler?.onWheelEvent?(delta)
-        }
+        let now = CACurrentMediaTime()
+        if now - lastScrollTime < Self.scrollMinInterval { return }
+
+        let raw = event.scrollingDeltaY
+        if raw == 0 { return }
+        let divided = raw / Self.scrollDivisor
+        let delta: Int32 = raw > 0
+            ? Int32(max(1.0, divided))
+            : Int32(min(-1.0, divided))
+        inputHandler?.onWheelEvent?(delta)
+        lastScrollTime = now
     }
 
     override func updateTrackingAreas() {
@@ -295,21 +370,35 @@ class InputMTKView: MTKView {
         }
         let area = NSTrackingArea(
             rect: bounds,
-            options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect, .mouseEnteredAndExited],
+            options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect, .mouseEnteredAndExited,
+                      .cursorUpdate],
             owner: self,
             userInfo: nil
         )
         addTrackingArea(area)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        let cursor = customCursor ?? NSCursor.arrow
+        addCursorRect(bounds, cursor: cursor)
+    }
+
+    func updateCustomCursor(_ cursor: NSCursor?) {
+        customCursor = cursor
+        window?.invalidateCursorRects(for: self)
     }
 }
 
 struct MetalDisplayViewWrapper: NSViewRepresentable {
     let renderer: MetalDisplayRenderer?
     let inputHandler: InputHandler?
+    let guestCursor: NSCursor?
 
     func makeNSView(context: Context) -> InputMTKView {
         let view = InputMTKView()
         view.inputHandler = inputHandler
+        view.customCursor = guestCursor
         if let renderer = renderer {
             view.device = renderer.device
             view.colorPixelFormat = .bgra8Unorm
@@ -324,5 +413,8 @@ struct MetalDisplayViewWrapper: NSViewRepresentable {
     func updateNSView(_ nsView: InputMTKView, context: Context) {
         nsView.delegate = renderer
         nsView.inputHandler = inputHandler
+        if nsView.customCursor !== guestCursor {
+            nsView.updateCustomCursor(guestCursor)
+        }
     }
 }

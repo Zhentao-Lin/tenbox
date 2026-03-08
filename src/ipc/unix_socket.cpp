@@ -68,11 +68,10 @@ std::string UnixSocketConnection::ReadLine() {
             return line;
         }
 
-        char buf[4096];
+        char buf[65536];
         ssize_t n = ::read(fd_, buf, sizeof(buf));
         if (n <= 0) {
             if (n < 0 && errno == EINTR) continue;
-            // EOF or error — return what we have
             if (!line_buffer_.empty()) {
                 std::string line = std::move(line_buffer_);
                 line_buffer_.clear();

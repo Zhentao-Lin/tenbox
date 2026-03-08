@@ -45,6 +45,7 @@ bool UnixSocketTransport::Connect(const std::string& endpoint) {
         fd_ = -1;
         return false;
     }
+
     return true;
 }
 

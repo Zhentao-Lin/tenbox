@@ -33,13 +33,14 @@ kmod,pciutils,usbutils,\
 coreutils,findutils,grep,gawk,sed,tar,gzip,bzip2,xz-utils"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BUILD_DIR="$SCRIPT_DIR/../../build"
-mkdir -p "$BUILD_DIR"
+BUILD_DIR="$(mkdir -p "$SCRIPT_DIR/../../build" && cd "$SCRIPT_DIR/../../build" && pwd)"
 
 CACHE_DIR="$BUILD_DIR/.rootfs-cache"
 CHECKPOINT_DIR="$CACHE_DIR/checkpoints-arm64"
 APT_CACHE_DIR="$CACHE_DIR/apt-archives-arm64"
 mkdir -p "$CHECKPOINT_DIR" "$APT_CACHE_DIR"
+
+CACHE_TAR="$(realpath -m "$CACHE_DIR/debootstrap-${SUITE}-arm64.tar")"
 
 WORK_DIR="${TENBOX_WORK_DIR:-/tmp/tenbox-rootfs-arm64}"
 
@@ -93,8 +94,11 @@ STEPS=(
     "install_guest_agent"
     "install_devtools"
     "install_audio"
+    "install_ibus"
+    "install_usertools"
     "config_locale"
     "config_services"
+    "config_virtio_gpu"
     "config_network"
     "config_virtiofs"
     "config_spice"
@@ -117,8 +121,11 @@ STEP_DESCRIPTIONS=(
     "Install Guest Agent"
     "Install development tools"
     "Install audio (PulseAudio + ALSA)"
+    "Install IBus Chinese input method"
+    "Install user tools (Chromium, etc.)"
     "Configure locale"
     "Configure systemd services"
+    "Configure virtio-gpu resize"
     "Configure network"
     "Configure virtio-fs"
     "Configure SPICE"
@@ -236,8 +243,24 @@ do_debootstrap() {
         return 0
     fi
 
-    sudo debootstrap --arch=$ARCH --include="$INCLUDE_PKGS" \
-        "$SUITE" "$MOUNT_DIR" "$MIRROR"
+    if [ -f "$CACHE_TAR" ]; then
+        echo "  Using cached tarball: $CACHE_TAR"
+        if ! sudo debootstrap --arch=$ARCH --include="$INCLUDE_PKGS" \
+            --unpack-tarball="$CACHE_TAR" "$SUITE" "$MOUNT_DIR" "$MIRROR"; then
+            echo "  Cache tarball failed, removing stale cache and cleaning mount dir..."
+            rm -f "$CACHE_TAR"
+            sudo rm -rf "${MOUNT_DIR:?}"/*
+            sudo debootstrap --arch=$ARCH --include="$INCLUDE_PKGS" \
+                "$SUITE" "$MOUNT_DIR" "$MIRROR"
+        fi
+    else
+        echo "  No cache found, downloading packages (first run)..."
+        sudo debootstrap --arch=$ARCH --include="$INCLUDE_PKGS" \
+            --make-tarball="$CACHE_TAR" "$SUITE" "$WORK_DIR/tarball-tmp" "$MIRROR"
+        rm -rf "$WORK_DIR/tarball-tmp"
+        sudo debootstrap --arch=$ARCH --include="$INCLUDE_PKGS" \
+            --unpack-tarball="$CACHE_TAR" "$SUITE" "$MOUNT_DIR" "$MIRROR"
+    fi
 }
 
 do_setup_chroot() {
@@ -372,6 +395,38 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
 EOF
 }
 
+do_install_ibus() {
+    sudo chroot "$MOUNT_DIR" /bin/bash -e << EOF
+if dpkg -s ibus-libpinyin &>/dev/null; then
+    echo "  IBus already installed"
+    exit 0
+fi
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    ibus ibus-libpinyin ibus-gtk3 ibus-gtk4
+
+cat >> /home/$USER_NAME/.bashrc << 'IBUS'
+
+# IBus input method
+export GTK_IM_MODULE=ibus
+export QT_IM_MODULE=ibus
+export XMODIFIERS=@im=ibus
+IBUS
+EOF
+}
+
+do_install_usertools() {
+    sudo chroot "$MOUNT_DIR" /bin/bash -e << EOF
+if dpkg -s chromium &>/dev/null; then
+    echo "  User tools already installed"
+    exit 0
+fi
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    chromium
+
+su - $USER_NAME -c 'echo "export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium" >> ~/.bashrc'
+EOF
+}
+
 do_config_locale() {
     sudo chroot "$MOUNT_DIR" /bin/bash -e << 'EOF'
 if locale -a 2>/dev/null | grep -q "zh_CN.utf8"; then
@@ -421,6 +476,20 @@ LDM
 systemctl enable networking.service 2>/dev/null || true
 systemctl set-default graphical.target
 systemctl enable lightdm.service 2>/dev/null || true
+EOF
+}
+
+do_config_virtio_gpu() {
+    sudo chroot "$MOUNT_DIR" /bin/bash -e << 'EOF'
+if [ -f /etc/udev/rules.d/95-virtio-gpu-resize.rules ]; then
+    echo "  Virtio-GPU already configured"
+    exit 0
+fi
+cat > /etc/udev/rules.d/95-virtio-gpu-resize.rules << 'UDEV'
+ACTION=="change", SUBSYSTEM=="drm", ENV{HOTPLUG}=="1", RUN+="/usr/bin/bash -c '/usr/local/bin/virtio-gpu-resize.sh &'"
+UDEV
+cp /tmp/rootfs-scripts/virtio-gpu-resize.sh /usr/local/bin/
+chmod +x /usr/local/bin/virtio-gpu-resize.sh
 EOF
 }
 
@@ -512,10 +581,13 @@ check "init"              test -x /sbin/init
 check "systemd"           dpkg -s systemd
 check "xfce4"             dpkg -s xfce4
 check "lightdm"           dpkg -s lightdm
+check "chromium"          dpkg -s chromium
 check "spice-vdagent"     dpkg -s spice-vdagent
 check "qemu-guest-agent"  dpkg -s qemu-guest-agent
 check "pulseaudio"        dpkg -s pulseaudio
 check "curl"              command -v curl
+check "wget"              command -v wget
+check "vim"               command -v vim
 check "arch=arm64"        test "$(dpkg --print-architecture)" = "arm64"
 if [ "$FAIL" -ne 0 ]; then
     echo "WARNING: some components are missing!"
@@ -560,8 +632,11 @@ run_step "install_spice"  "Installing SPICE vdagent"     do_install_spice
 run_step "install_guest_agent" "Installing Guest Agent"  do_install_guest_agent
 run_step "install_devtools" "Installing dev tools"       do_install_devtools
 run_step "install_audio"  "Installing audio"             do_install_audio
+run_step "install_ibus"   "Installing IBus"              do_install_ibus
+run_step "install_usertools" "Installing user tools"     do_install_usertools
 run_step "config_locale"  "Configuring locale"           do_config_locale
 run_step "config_services" "Configuring services"        do_config_services
+run_step "config_virtio_gpu" "Configuring virtio-gpu"    do_config_virtio_gpu
 run_step "config_network" "Configuring network"          do_config_network
 run_step "config_virtiofs" "Configuring virtio-fs"       do_config_virtiofs
 run_step "config_spice"   "Configuring SPICE"            do_config_spice

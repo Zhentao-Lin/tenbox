@@ -22,6 +22,7 @@
   #define SOCK_ERR        SOCKET_ERROR
   #define SOCK_ERRNO      WSAGetLastError()
   #define SOCK_WOULDBLOCK WSAEWOULDBLOCK
+  #define SOCK_INPROGRESS WSAEWOULDBLOCK
   #define SOCK_SETNONBLOCK(s) do { u_long nb_ = 1; ioctlsocket((s), FIONBIO, &nb_); } while(0)
   #define SOCK_SELECT_NFDS 0
   #define SOCK_SLEEP_MS(ms) Sleep(ms)
@@ -42,6 +43,7 @@
   #define SOCK_ERR        (-1)
   #define SOCK_ERRNO      errno
   #define SOCK_WOULDBLOCK EWOULDBLOCK
+  #define SOCK_INPROGRESS EINPROGRESS
   #define SOCK_SETNONBLOCK(s) do { int fl_ = fcntl((s), F_GETFL, 0); fcntl((s), F_SETFL, fl_ | O_NONBLOCK); } while(0)
   #define SOCK_SELECT_NFDS(fds) ((int)(fds) + 1)
   #define SOCK_SLEEP_MS(ms) usleep((ms) * 1000)
@@ -995,7 +997,8 @@ void NetBackend::OnTcpAccepted(NatEntry* entry, void* new_pcb_v) {
     addr.sin_port = htons(entry->real_dst_port);
 
     int ret = connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-    if (ret == SOCK_ERR && SOCK_ERRNO != SOCK_WOULDBLOCK) {
+    int connect_err = SOCK_ERRNO;
+    if (ret == SOCK_ERR && connect_err != SOCK_WOULDBLOCK && connect_err != SOCK_INPROGRESS) {
         SOCK_CLOSE(s);
         tcp_arg(new_pcb, nullptr);
         tcp_recv(new_pcb, nullptr);
@@ -1094,6 +1097,7 @@ bool NetBackend::PollSockets() {
     FD_ZERO(&rfds);
     FD_ZERO(&wfds);
     int count = 0;
+    SocketHandle max_fd = SOCK_INVALID;
 
     for (auto& e : nat_entries_) {
         SocketHandle s = static_cast<SocketHandle>(e->host_socket);
@@ -1105,9 +1109,8 @@ bool NetBackend::PollSockets() {
             if (e->proto == IPPROTO_TCP) {
                 DrainTcpToGuest(e.get());
                 if (!e->pending_to_guest.empty())
-                    continue; // back-pressure: don't read until drained
+                    continue;
 
-                // Monitor for writability if we have pending data to host
                 if (!e->pending_to_host.empty()) {
                     FD_SET(s, &wfds);
                     count++;
@@ -1116,12 +1119,14 @@ bool NetBackend::PollSockets() {
             FD_SET(s, &rfds);
             count++;
         }
+        if (max_fd == SOCK_INVALID || s > max_fd) max_fd = s;
     }
 
     if (count == 0) return false;
 
-    struct timeval tv = {0, 1000}; // 1ms timeout
-    int n = select(0, &rfds, &wfds, nullptr, &tv);
+    struct timeval tv = {0, 1000};
+    int nfds = (max_fd == SOCK_INVALID) ? 0 : static_cast<int>(max_fd) + 1;
+    int n = select(nfds, &rfds, &wfds, nullptr, &tv);
     if (n <= 0) return true;
 
     for (size_t i = 0; i < nat_entries_.size(); i++) {
@@ -1375,7 +1380,7 @@ void NetBackend::PollIcmpSocket() {
     FD_ZERO(&rfds);
     FD_SET(s, &rfds);
     struct timeval tv = {0, 0};
-    if (select(0, &rfds, nullptr, nullptr, &tv) <= 0) return;
+    if (select(static_cast<int>(s) + 1, &rfds, nullptr, nullptr, &tv) <= 0) return;
 
     char buf[2048];
     struct sockaddr_in from{};
@@ -1524,7 +1529,7 @@ void NetBackend::PollPortForwards() {
         FD_ZERO(&rfds);
         FD_SET(ls, &rfds);
         struct timeval tv = {0, 0};
-        if (select(0, &rfds, nullptr, nullptr, &tv) > 0 && FD_ISSET(ls, &rfds)) {
+        if (select(static_cast<int>(ls) + 1, &rfds, nullptr, nullptr, &tv) > 0 && FD_ISSET(ls, &rfds)) {
             SocketHandle cs = accept(ls, nullptr, nullptr);
             if (cs != SOCK_INVALID) {
                 SOCK_SETNONBLOCK(cs);
@@ -1613,7 +1618,7 @@ void NetBackend::PollPortForwards() {
                 FD_SET(s, &wfds);
             }
             tv = {0, 0};
-            int sel_result = select(0, &rfds, &wfds, nullptr, &tv);
+            int sel_result = select(static_cast<int>(s) + 1, &rfds, &wfds, nullptr, &tv);
             if (sel_result <= 0) continue;
 
             // Drain pending data to host when socket becomes writable

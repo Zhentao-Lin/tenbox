@@ -69,6 +69,7 @@ class AppState: ObservableObject {
     @Published var vms: [VmInfo] = []
     @Published var selectedVmId: String?
     @Published var showCreateVmDialog = false
+    @Published var showEditVmDialog = false
 
     private var bridge = TenBoxBridgeWrapper()
     private var activeSessions: [String: WeakRef<VmSession>] = [:]
@@ -112,6 +113,11 @@ class AppState: ObservableObject {
 
     func createVm(config: VmCreateConfig) {
         bridge.createVm(config: config)
+        refreshVmList()
+    }
+
+    func editVm(id: String, name: String, memoryMb: Int, cpuCount: Int, netEnabled: Bool) {
+        bridge.editVm(id: id, name: name, memoryMb: memoryMb, cpuCount: cpuCount, netEnabled: netEnabled)
         refreshVmList()
     }
 

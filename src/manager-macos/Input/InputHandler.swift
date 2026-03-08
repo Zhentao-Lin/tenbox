@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 
 class InputHandler {
     // Callbacks to IPC layer
@@ -10,6 +11,12 @@ class InputHandler {
     private var buttonMask: UInt32 = 0
     private var lastX: Int32 = 0
     private var lastY: Int32 = 0
+
+    // Throttle pure-move pointer events to avoid flooding the pipe (matches Windows manager).
+    private static let pointerMinInterval: Double = 0.020  // 20 ms
+    private var lastPointerTime: Double = 0
+    private var lastSentX: Int32 = -1
+    private var lastSentY: Int32 = -1
 
     func handleKeyDown(_ event: NSEvent) {
         guard let code = macKeyCodeToEvdev(event.keyCode) else { return }
@@ -36,12 +43,24 @@ class InputHandler {
         }
         lastX = absX
         lastY = absY
+        lastSentX = absX
+        lastSentY = absY
+        lastPointerTime = CACurrentMediaTime()
         onPointerEvent?(absX, absY, buttonMask)
     }
 
     func handleMouseMoved(absX: Int32, absY: Int32) {
         lastX = absX
         lastY = absY
+
+        if absX == lastSentX && absY == lastSentY { return }
+
+        let now = CACurrentMediaTime()
+        if now - lastPointerTime < Self.pointerMinInterval { return }
+        lastPointerTime = now
+        lastSentX = absX
+        lastSentY = absY
+
         onPointerEvent?(absX, absY, buttonMask)
     }
 

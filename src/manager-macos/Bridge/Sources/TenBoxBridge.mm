@@ -130,7 +130,8 @@ static NSString* GetVmsDir() {
         info.memoryMb = [dict[@"memory_mb"] integerValue] ?: 512;
         info.cpuCount = [dict[@"cpu_count"] integerValue] ?: 2;
         info.state = state;
-        info.netLinkUp = [dict[@"net_link_up"] boolValue];
+        info.netEnabled = [dict[@"net_enabled"] boolValue];
+        info.cmdline = dict[@"cmdline"] ?: @"";
         [result addObject:info];
     }
 
@@ -159,7 +160,6 @@ static NSString* GetVmsDir() {
         @"cmdline": config.cmdline ?: @"",
         @"net_enabled": @(config.netEnabled),
         @"state": @"stopped",
-        @"net_link_up": @NO,
     };
 
     NSData* data = [NSJSONSerialization dataWithJSONObject:dict
@@ -167,6 +167,28 @@ static NSString* GetVmsDir() {
                                                     error:nil];
     NSString* path = [vmDir stringByAppendingPathComponent:@"config.json"];
     return [data writeToFile:path atomically:YES];
+}
+
+- (BOOL)editVmWithId:(NSString *)vmId name:(NSString *)name memoryMb:(NSInteger)memoryMb cpuCount:(NSInteger)cpuCount netEnabled:(BOOL)netEnabled {
+    NSString* vmDir = [GetVmsDir() stringByAppendingPathComponent:vmId];
+    NSString* configPath = [vmDir stringByAppendingPathComponent:@"config.json"];
+    NSData* data = [NSData dataWithContentsOfFile:configPath];
+    if (!data) return NO;
+
+    NSMutableDictionary* config = [[NSJSONSerialization JSONObjectWithData:data
+                                                                  options:NSJSONReadingMutableContainers
+                                                                    error:nil] mutableCopy];
+    if (!config) return NO;
+
+    config[@"name"] = name;
+    config[@"memory_mb"] = @(memoryMb);
+    config[@"cpu_count"] = @(cpuCount);
+    config[@"net_enabled"] = @(netEnabled);
+
+    NSData* newData = [NSJSONSerialization dataWithJSONObject:config
+                                                     options:NSJSONWritingPrettyPrinted
+                                                       error:nil];
+    return [newData writeToFile:configPath atomically:YES];
 }
 
 - (BOOL)deleteVmWithId:(NSString *)vmId {

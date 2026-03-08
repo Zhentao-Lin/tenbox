@@ -8,6 +8,8 @@ class IpcClientWrapper: ObservableObject {
     // Display: (pixels, dirtyW, dirtyH, stride, resourceW, resourceH, dirtyX, dirtyY)
     var onFrame: ((Data, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32) -> Void)?
     var onDisplayState: ((Bool, UInt32, UInt32) -> Void)?
+    // Cursor: (visible, imageUpdated, width, height, hotX, hotY, pixels?)
+    var onCursor: ((Bool, Bool, UInt32, UInt32, UInt32, UInt32, Data?) -> Void)?
 
     // Audio
     var onAudio: ((Data, UInt32, UInt16) -> Void)?
@@ -23,6 +25,9 @@ class IpcClientWrapper: ObservableObject {
     // VM state
     var onRuntimeState: ((String) -> Void)?
     var onGuestAgentState: ((Bool) -> Void)?
+
+    // Disconnect (called when the IPC recv loop exits, e.g. runtime crashed)
+    var onDisconnect: (() -> Void)?
 
     func connect(vmId: String) -> Bool {
         let result = client.connect(toVm: vmId)
@@ -43,8 +48,10 @@ class IpcClientWrapper: ObservableObject {
     }
 
     func disconnect() {
-        client.disconnect()
         isConnected = false
+        DispatchQueue.global(qos: .userInitiated).async { [client] in
+            client.disconnect()
+        }
     }
 
     // MARK: - Send
@@ -96,6 +103,9 @@ class IpcClientWrapper: ObservableObject {
             frameHandler: { [weak self] pixels, w, h, stride, resW, resH, dirtyX, dirtyY in
                 self?.onFrame?(pixels, w, h, stride, resW, resH, dirtyX, dirtyY)
             },
+            cursorHandler: { [weak self] visible, imageUpdated, w, h, hotX, hotY, pixels in
+                self?.onCursor?(visible, imageUpdated, w, h, hotX, hotY, pixels)
+            },
             audioHandler: { [weak self] pcm, rate, channels in
                 self?.onAudio?(pcm, rate, channels)
             },
@@ -123,6 +133,7 @@ class IpcClientWrapper: ObservableObject {
             },
             disconnectHandler: { [weak self] in
                 self?.isConnected = false
+                self?.onDisconnect?()
             }
         )
     }

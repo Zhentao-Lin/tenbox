@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct ConsoleView: View {
     @ObservedObject var session: VmSession
@@ -7,27 +8,14 @@ struct ConsoleView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    Text(session.consoleText)
-                        .font(.system(.body, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
-                        .textSelection(.enabled)
-                        .id("console-bottom")
-                }
-                .background(Color(.textBackgroundColor))
-                .onChange(of: session.consoleText) {
-                    proxy.scrollTo("console-bottom", anchor: .bottom)
-                }
-            }
+            ConsoleTextView(text: session.consoleText)
 
             Divider()
 
             HStack {
                 TextField("Type command...", text: $inputText)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
+                    .font(.system(size: 12, design: .monospaced))
                     .onSubmit {
                         sendInput()
                     }
@@ -45,5 +33,42 @@ struct ConsoleView: View {
         let text = inputText + "\n"
         inputText = ""
         session.sendConsoleInput(text)
+    }
+}
+
+struct ConsoleTextView: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSTextView.scrollableTextView()
+        let textView = scrollView.documentView as! NSTextView
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        textView.textColor = .textColor
+        textView.backgroundColor = .textBackgroundColor
+        textView.textContainerInset = NSSize(width: 4, height: 4)
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        let atBottom = isScrolledToBottom(scrollView)
+        textView.string = text
+        if atBottom {
+            textView.scrollToEndOfDocument(nil)
+        }
+    }
+
+    private func isScrolledToBottom(_ scrollView: NSScrollView) -> Bool {
+        let contentView = scrollView.contentView
+        let docHeight = scrollView.documentView?.frame.height ?? 0
+        let clipHeight = contentView.bounds.height
+        if docHeight <= clipHeight { return true }
+        return contentView.bounds.origin.y >= docHeight - clipHeight - 20
     }
 }

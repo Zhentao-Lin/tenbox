@@ -49,8 +49,9 @@ struct InfoView: View {
                 GroupBox("Network") {
                     Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                         GridRow {
-                            Text("Link").foregroundStyle(.secondary)
-                            Text(vm.netLinkUp ? "Up" : "Down")
+                            Text("Network").foregroundStyle(.secondary)
+                            Text(vm.netEnabled ? "Enabled" : "Disabled")
+                                .foregroundStyle(vm.netEnabled ? .primary : .secondary)
                         }
                     }
                     .padding(8)

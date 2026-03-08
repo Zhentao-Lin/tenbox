@@ -3,6 +3,7 @@
 #include "core/vmm/machine_model.h"
 #include "core/arch/aarch64/pl011.h"
 #include "core/arch/aarch64/boot.h"
+#include "core/device/rtc/pl031_rtc.h"
 
 // ARM64 virt machine model (Apple Hypervisor.framework).
 // Uses GICv3, PL011 UART, FDT boot, and VirtIO MMIO.
@@ -40,6 +41,7 @@ public:
 
 private:
     Pl011 uart_;
+    Pl031Rtc rtc_;
     GPA kernel_entry_ = 0;
     GPA fdt_gpa_ = 0;
 
@@ -49,6 +51,10 @@ private:
     // PL011 UART base address (QEMU virt convention)
     static constexpr GPA kUartBase = 0x09000000;
     static constexpr uint8_t kUartIrq = 1;  // SPI 1 → actual GIC IRQ 33
+
+    // PL031 RTC base address (QEMU virt convention)
+    static constexpr GPA kRtcBase = 0x09010000;
+    static constexpr uint8_t kRtcIrq = 2;   // SPI 2 → actual GIC IRQ 34
 
     // VirtIO MMIO starts at 0x0A000000 with 0x200 stride
     static constexpr GPA kVirtioMmioBase  = 0x0A000000;

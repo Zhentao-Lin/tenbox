@@ -5,6 +5,7 @@
 #include <mutex>
 #include <atomic>
 #include <thread>
+#include <unistd.h>
 
 static std::string HexEncode(const std::string& input) {
     static const char hex[] = "0123456789abcdef";
@@ -171,7 +172,7 @@ static std::string HexDecode(const std::string& hex) {
 
     ipc::Message msg;
     msg.channel = ipc::Channel::kClipboard;
-    msg.kind = ipc::Kind::kEvent;
+    msg.kind = ipc::Kind::kRequest;
     msg.type = "clipboard.grab";
     std::string typesStr;
     for (NSUInteger i = 0; i < types.count; ++i) {
@@ -189,7 +190,7 @@ static std::string HexDecode(const std::string& hex) {
 
     ipc::Message msg;
     msg.channel = ipc::Channel::kClipboard;
-    msg.kind = ipc::Kind::kEvent;
+    msg.kind = ipc::Kind::kRequest;
     msg.type = "clipboard.data";
     msg.fields["data_type"] = std::to_string(dataType);
     if (payload.length > 0) {
@@ -208,7 +209,7 @@ static std::string HexDecode(const std::string& hex) {
 
     ipc::Message msg;
     msg.channel = ipc::Channel::kClipboard;
-    msg.kind = ipc::Kind::kEvent;
+    msg.kind = ipc::Kind::kRequest;
     msg.type = "clipboard.request";
     msg.fields["data_type"] = std::to_string(dataType);
 
@@ -221,7 +222,7 @@ static std::string HexDecode(const std::string& hex) {
 
     ipc::Message msg;
     msg.channel = ipc::Channel::kClipboard;
-    msg.kind = ipc::Kind::kEvent;
+    msg.kind = ipc::Kind::kRequest;
     msg.type = "clipboard.release";
 
     std::lock_guard<std::mutex> lock(_sendLock);
@@ -231,6 +232,7 @@ static std::string HexDecode(const std::string& hex) {
 #pragma mark - Receive Loop
 
 - (void)startReceiveLoopWithFrameHandler:(void (^)(NSData *, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t))frameHandler
+                           cursorHandler:(void (^)(BOOL, BOOL, uint32_t, uint32_t, uint32_t, uint32_t, NSData * _Nullable))cursorHandler
                             audioHandler:(void (^)(NSData *, uint32_t, uint16_t))audioHandler
                          consoleHandler:(void (^)(NSString *))consoleHandler
                     clipboardGrabHandler:(void (^)(NSArray<NSNumber *> *))clipboardGrabHandler
@@ -243,6 +245,7 @@ static std::string HexDecode(const std::string& hex) {
     _running = true;
 
     typedef void (^FrameBlock)(NSData *, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+    typedef void (^CursorBlock)(BOOL, BOOL, uint32_t, uint32_t, uint32_t, uint32_t, NSData * _Nullable);
     typedef void (^AudioBlock)(NSData *, uint32_t, uint16_t);
     typedef void (^ConsoleBlock)(NSString *);
     typedef void (^ClipGrabBlock)(NSArray<NSNumber *> *);
@@ -254,6 +257,7 @@ static std::string HexDecode(const std::string& hex) {
     typedef void (^VoidBlock)(void);
 
     FrameBlock     fh  = [frameHandler copy];
+    CursorBlock    cuH = [cursorHandler copy];
     AudioBlock     ah  = [audioHandler copy];
     ConsoleBlock   coh = [consoleHandler copy];
     ClipGrabBlock  cgH = [clipboardGrabHandler copy];
@@ -264,193 +268,221 @@ static std::string HexDecode(const std::string& hex) {
     DispStateBlock dsH = [displayStateHandler copy];
     VoidBlock      dh  = [disconnectHandler copy];
 
-    _recvThread = std::thread([self, fh, ah, coh, cgH, cdH, crH, rsH, gaH, dsH, dh] {
-        while (self->_running && self->_connection && self->_connection->IsValid()) {
-            std::string line = self->_connection->ReadLine();
-            if (line.empty()) {
-                break;
-            }
+    _recvThread = std::thread([self, fh, cuH, ah, coh, cgH, cdH, crH, rsH, gaH, dsH, dh] {
+        // Streaming parser — mirrors the Windows DispatchPipeData approach.
+        // One large read buffer, parse header lines + payloads in-place.
+        std::string pending;
+        pending.reserve(8 * 1024 * 1024);
+        char readbuf[256 * 1024];
 
-            auto decoded = ipc::Decode(line);
-            if (!decoded) continue;
+        size_t payload_needed = 0;
+        ipc::Message pending_msg;
 
-            auto& msg = *decoded;
+        auto dispatchMessages = [&]() {
+            while (!pending.empty()) {
+                if (payload_needed > 0) {
+                    if (pending.size() < payload_needed) return;
+                    pending_msg.payload.assign(
+                        reinterpret_cast<const uint8_t*>(pending.data()),
+                        reinterpret_cast<const uint8_t*>(pending.data()) + payload_needed);
+                    pending.erase(0, payload_needed);
+                    payload_needed = 0;
 
-            auto it = msg.fields.find("payload_size");
-            if (it != msg.fields.end()) {
-                size_t psize = std::stoull(it->second);
-                msg.payload.resize(psize);
-                if (!self->_connection->ReadExact(msg.payload.data(), psize)) {
-                    break;
-                }
-            }
-
-            // Display frame (dirty rect update within a resource)
-            if (msg.type == "display.frame") {
-                auto getU32 = [&](const char* key) -> uint32_t {
-                    auto fi = msg.fields.find(key);
-                    return (fi != msg.fields.end()) ? static_cast<uint32_t>(std::stoul(fi->second)) : 0;
-                };
-                uint32_t w = getU32("width");
-                uint32_t h = getU32("height");
-                uint32_t stride = getU32("stride");
-                uint32_t resW = getU32("resource_width");
-                uint32_t resH = getU32("resource_height");
-                uint32_t dirtyX = getU32("dirty_x");
-                uint32_t dirtyY = getU32("dirty_y");
-
-                if (resW == 0) resW = w;
-                if (resH == 0) resH = h;
-
-                if (w == 0 || h == 0 || stride == 0 || msg.payload.empty()) {
+                    auto& msg = pending_msg;
+                    [self dispatchMsg:msg fh:fh cuH:cuH ah:ah coh:coh cgH:cgH cdH:cdH crH:crH rsH:rsH gaH:gaH dsH:dsH];
                     continue;
                 }
 
-                NSData* pixels = [NSData dataWithBytes:msg.payload.data()
-                                                length:msg.payload.size()];
-                fh(pixels, w, h, stride, resW, resH, dirtyX, dirtyY);
-            }
-            // Audio PCM
-            else if (msg.type == "audio.pcm") {
-                uint32_t rate = 44100;
-                uint16_t channels = 2;
-                auto ri = msg.fields.find("sample_rate");
-                auto ci = msg.fields.find("channels");
-                if (ri != msg.fields.end()) rate = std::stoul(ri->second);
-                if (ci != msg.fields.end()) channels = static_cast<uint16_t>(std::stoul(ci->second));
+                size_t nl = pending.find('\n');
+                if (nl == std::string::npos) return;
+                std::string line = pending.substr(0, nl + 1);
+                pending.erase(0, nl + 1);
 
-                NSData* pcm = [NSData dataWithBytes:msg.payload.data()
-                                             length:msg.payload.size()];
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    ah(pcm, rate, channels);
-                });
-            }
-            // Console data — batch and flush to avoid flooding the main thread
-            else if (msg.type == "console.data") {
-                auto di = msg.fields.find("data_hex");
-                if (di != msg.fields.end()) {
-                    std::string raw = HexDecode(di->second);
-                    NSString* text = [[NSString alloc] initWithBytes:raw.data()
-                                                              length:raw.size()
-                                                            encoding:NSUTF8StringEncoding];
-                    if (!text) {
-                        text = [[NSString alloc] initWithBytes:raw.data()
-                                                        length:raw.size()
-                                                      encoding:NSISOLatin1StringEncoding];
-                    }
-                    if (text) {
-                        {
-                            std::lock_guard<std::mutex> cl(self->_consoleLock);
-                            if (!self->_consoleBatch) {
-                                self->_consoleBatch = [NSMutableString new];
-                            }
-                            [self->_consoleBatch appendString:text];
-                        }
-                        if (!self->_consoleFlushScheduled.exchange(true)) {
-                            dispatch_after(
-                                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(50 * NSEC_PER_MSEC)),
-                                dispatch_get_main_queue(), ^{
-                                    NSString* batch;
-                                    {
-                                        std::lock_guard<std::mutex> cl(self->_consoleLock);
-                                        batch = [self->_consoleBatch copy];
-                                        [self->_consoleBatch setString:@""];
-                                    }
-                                    self->_consoleFlushScheduled = false;
-                                    if (batch.length > 0) {
-                                        coh(batch);
-                                    }
-                                });
-                        }
+                auto decoded = ipc::Decode(line);
+                if (!decoded) continue;
+
+                auto ps_it = decoded->fields.find("payload_size");
+                if (ps_it != decoded->fields.end()) {
+                    payload_needed = std::strtoull(ps_it->second.c_str(), nullptr, 10);
+                    decoded->fields.erase(ps_it);
+                    if (payload_needed > 0) {
+                        pending_msg = std::move(*decoded);
+                        continue;
                     }
                 }
+
+                auto& msg = *decoded;
+                [self dispatchMsg:msg fh:fh cuH:cuH ah:ah coh:coh cgH:cgH cdH:cdH crH:crH rsH:rsH gaH:gaH dsH:dsH];
             }
-            // Clipboard grab (from guest)
-            else if (msg.type == "clipboard.grab") {
-                auto ti = msg.fields.find("types");
-                if (ti != msg.fields.end()) {
-                    NSMutableArray<NSNumber *>* types = [NSMutableArray array];
-                    std::string typesStr = ti->second;
-                    size_t pos = 0;
-                    while (pos < typesStr.size()) {
-                        size_t comma = typesStr.find(',', pos);
-                        if (comma == std::string::npos) comma = typesStr.size();
-                        std::string numStr = typesStr.substr(pos, comma - pos);
-                        if (!numStr.empty()) {
-                            [types addObject:@(static_cast<uint32_t>(std::strtoul(numStr.c_str(), nullptr, 10)))];
-                        }
-                        pos = comma + 1;
-                    }
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        cgH(types);
-                    });
-                }
+        };
+
+        int fd = self->_connection->fd();
+        while (self->_running && self->_connection && self->_connection->IsValid()) {
+            ssize_t n = ::read(fd, readbuf, sizeof(readbuf));
+            if (n <= 0) {
+                if (n < 0 && errno == EINTR) continue;
+                break;
             }
-            // Clipboard data (from guest)
-            else if (msg.type == "clipboard.data") {
-                uint32_t dataType = 0;
-                auto dti = msg.fields.find("data_type");
-                if (dti != msg.fields.end()) {
-                    dataType = static_cast<uint32_t>(std::strtoul(dti->second.c_str(), nullptr, 10));
-                }
-                NSData* payload = [NSData dataWithBytes:msg.payload.data()
-                                                 length:msg.payload.size()];
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    cdH(dataType, payload);
-                });
-            }
-            // Clipboard request (from guest)
-            else if (msg.type == "clipboard.request") {
-                uint32_t dataType = 0;
-                auto dti = msg.fields.find("data_type");
-                if (dti != msg.fields.end()) {
-                    dataType = static_cast<uint32_t>(std::strtoul(dti->second.c_str(), nullptr, 10));
-                }
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    crH(dataType);
-                });
-            }
-            // Runtime state
-            else if (msg.type == "runtime.state") {
-                auto si = msg.fields.find("state");
-                if (si != msg.fields.end()) {
-                    NSString* state = [NSString stringWithUTF8String:si->second.c_str()];
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        rsH(state);
-                    });
-                }
-            }
-            // Guest agent state
-            else if (msg.type == "guest_agent.state") {
-                auto ci = msg.fields.find("connected");
-                BOOL connected = NO;
-                if (ci != msg.fields.end()) {
-                    connected = (ci->second == "1");
-                }
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    gaH(connected);
-                });
-            }
-            // Display state
-            else if (msg.type == "display.state") {
-                auto ai = msg.fields.find("active");
-                auto wi = msg.fields.find("width");
-                auto hi = msg.fields.find("height");
-                BOOL active = NO;
-                uint32_t w = 0, h = 0;
-                if (ai != msg.fields.end()) active = (ai->second == "1");
-                if (wi != msg.fields.end()) w = std::stoul(wi->second);
-                if (hi != msg.fields.end()) h = std::stoul(hi->second);
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    dsH(active, w, h);
-                });
-            }
+            pending.append(readbuf, static_cast<size_t>(n));
+            dispatchMessages();
         }
 
         dispatch_async(dispatch_get_main_queue(), ^{
             dh();
         });
     });
+}
+
+- (void)dispatchMsg:(ipc::Message&)msg
+                 fh:(void (^)(NSData *, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t))fh
+                cuH:(void (^)(BOOL, BOOL, uint32_t, uint32_t, uint32_t, uint32_t, NSData * _Nullable))cuH
+                 ah:(void (^)(NSData *, uint32_t, uint16_t))ah
+                coh:(void (^)(NSString *))coh
+                cgH:(void (^)(NSArray<NSNumber *> *))cgH
+                cdH:(void (^)(uint32_t, NSData *))cdH
+                crH:(void (^)(uint32_t))crH
+                rsH:(void (^)(NSString *))rsH
+                gaH:(void (^)(BOOL))gaH
+                dsH:(void (^)(BOOL, uint32_t, uint32_t))dsH {
+
+    auto getU32 = [&](const char* key) -> uint32_t {
+        auto fi = msg.fields.find(key);
+        return (fi != msg.fields.end()) ? static_cast<uint32_t>(std::strtoul(fi->second.c_str(), nullptr, 10)) : 0;
+    };
+
+    if (msg.type == "display.frame") {
+        uint32_t w = getU32("width");
+        uint32_t h = getU32("height");
+        uint32_t stride = getU32("stride");
+        uint32_t resW = getU32("resource_width");
+        uint32_t resH = getU32("resource_height");
+        uint32_t dirtyX = getU32("dirty_x");
+        uint32_t dirtyY = getU32("dirty_y");
+        if (resW == 0) resW = w;
+        if (resH == 0) resH = h;
+        if (w == 0 || h == 0 || stride == 0 || msg.payload.empty()) return;
+
+        NSData* pixels = [NSData dataWithBytesNoCopy:(void*)msg.payload.data()
+                                              length:msg.payload.size()
+                                        freeWhenDone:NO];
+        fh(pixels, w, h, stride, resW, resH, dirtyX, dirtyY);
+    }
+    else if (msg.type == "display.cursor") {
+        BOOL visible = (getU32("visible") != 0);
+        BOOL imageUpdated = (getU32("image_updated") != 0);
+        uint32_t w = getU32("width");
+        uint32_t h = getU32("height");
+        uint32_t hotX = getU32("hot_x");
+        uint32_t hotY = getU32("hot_y");
+        NSData* pixels = nil;
+        if (imageUpdated && !msg.payload.empty()) {
+            pixels = [NSData dataWithBytes:msg.payload.data()
+                                    length:msg.payload.size()];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            cuH(visible, imageUpdated, w, h, hotX, hotY, pixels);
+        });
+    }
+    else if (msg.type == "audio.pcm") {
+        uint32_t rate = 48000;
+        uint16_t channels = 2;
+        auto ri = msg.fields.find("sample_rate");
+        auto ci = msg.fields.find("channels");
+        if (ri != msg.fields.end()) rate = std::stoul(ri->second);
+        if (ci != msg.fields.end()) channels = static_cast<uint16_t>(std::stoul(ci->second));
+        NSData* pcm = [NSData dataWithBytes:msg.payload.data()
+                                     length:msg.payload.size()];
+        ah(pcm, rate, channels);
+    }
+    else if (msg.type == "console.data") {
+        auto di = msg.fields.find("data_hex");
+        if (di != msg.fields.end()) {
+            std::string raw = HexDecode(di->second);
+            NSString* text = [[NSString alloc] initWithBytes:raw.data()
+                                                      length:raw.size()
+                                                    encoding:NSUTF8StringEncoding];
+            if (!text) {
+                text = [[NSString alloc] initWithBytes:raw.data()
+                                                length:raw.size()
+                                              encoding:NSISOLatin1StringEncoding];
+            }
+            if (text) {
+                {
+                    std::lock_guard<std::mutex> cl(_consoleLock);
+                    if (!_consoleBatch) _consoleBatch = [NSMutableString new];
+                    [_consoleBatch appendString:text];
+                }
+                if (!_consoleFlushScheduled.exchange(true)) {
+                    dispatch_after(
+                        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(50 * NSEC_PER_MSEC)),
+                        dispatch_get_main_queue(), ^{
+                            NSString* batch;
+                            {
+                                std::lock_guard<std::mutex> cl(self->_consoleLock);
+                                batch = [self->_consoleBatch copy];
+                                [self->_consoleBatch setString:@""];
+                            }
+                            self->_consoleFlushScheduled = false;
+                            if (batch.length > 0) coh(batch);
+                        });
+                }
+            }
+        }
+    }
+    else if (msg.type == "clipboard.grab") {
+        auto ti = msg.fields.find("types");
+        if (ti != msg.fields.end()) {
+            NSMutableArray<NSNumber *>* types = [NSMutableArray array];
+            std::string typesStr = ti->second;
+            size_t pos = 0;
+            while (pos < typesStr.size()) {
+                size_t comma = typesStr.find(',', pos);
+                if (comma == std::string::npos) comma = typesStr.size();
+                std::string numStr = typesStr.substr(pos, comma - pos);
+                if (!numStr.empty()) {
+                    [types addObject:@(static_cast<uint32_t>(std::strtoul(numStr.c_str(), nullptr, 10)))];
+                }
+                pos = comma + 1;
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{ cgH(types); });
+        }
+    }
+    else if (msg.type == "clipboard.data") {
+        uint32_t dataType = 0;
+        auto dti = msg.fields.find("data_type");
+        if (dti != msg.fields.end())
+            dataType = static_cast<uint32_t>(std::strtoul(dti->second.c_str(), nullptr, 10));
+        NSData* payload = [NSData dataWithBytes:msg.payload.data() length:msg.payload.size()];
+        dispatch_async(dispatch_get_main_queue(), ^{ cdH(dataType, payload); });
+    }
+    else if (msg.type == "clipboard.request") {
+        uint32_t dataType = 0;
+        auto dti = msg.fields.find("data_type");
+        if (dti != msg.fields.end())
+            dataType = static_cast<uint32_t>(std::strtoul(dti->second.c_str(), nullptr, 10));
+        dispatch_async(dispatch_get_main_queue(), ^{ crH(dataType); });
+    }
+    else if (msg.type == "runtime.state") {
+        auto si = msg.fields.find("state");
+        if (si != msg.fields.end()) {
+            NSString* state = [NSString stringWithUTF8String:si->second.c_str()];
+            dispatch_async(dispatch_get_main_queue(), ^{ rsH(state); });
+        }
+    }
+    else if (msg.type == "guest_agent.state") {
+        auto ci = msg.fields.find("connected");
+        BOOL connected = (ci != msg.fields.end() && ci->second == "1");
+        dispatch_async(dispatch_get_main_queue(), ^{ gaH(connected); });
+    }
+    else if (msg.type == "display.state") {
+        auto ai = msg.fields.find("active");
+        auto wi = msg.fields.find("width");
+        auto hi = msg.fields.find("height");
+        BOOL active = (ai != msg.fields.end() && ai->second == "1");
+        uint32_t w = (wi != msg.fields.end()) ? std::stoul(wi->second) : 0;
+        uint32_t h = (hi != msg.fields.end()) ? std::stoul(hi->second) : 0;
+        dispatch_async(dispatch_get_main_queue(), ^{ dsH(active, w, h); });
+    }
 }
 
 - (void)stopReceiveLoop {

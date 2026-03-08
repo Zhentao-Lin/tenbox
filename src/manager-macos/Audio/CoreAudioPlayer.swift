@@ -1,9 +1,6 @@
 import AVFoundation
 import AudioToolbox
 
-// Core Audio-based audio player for VM sound output.
-// Receives PCM samples from VirtIO-SND via IPC and plays them through AudioQueue.
-
 class CoreAudioPlayer {
     private var audioQueue: AudioQueueRef?
     private var buffers: [AudioQueueBufferRef?] = []
@@ -14,69 +11,157 @@ class CoreAudioPlayer {
     private var pendingData = Data()
     private let dataLock = NSLock()
 
-    var sampleRate: Double = 44100.0
-    var channelCount: UInt32 = 2
-    var bitsPerSample: UInt32 = 16
+    private var currentSampleRate: Double = 48000.0
+    private var currentChannelCount: UInt32 = 2
+    private let bitsPerSample: UInt32 = 16
+
+    // Max buffered audio: ~200ms at 48kHz stereo S16 = 48000*2*2*0.2 = 38400 bytes
+    private let maxPendingBytes = 38400
+
+    private var audioThread: Thread?
+    private var audioRunLoop: CFRunLoop?
+    private let runLoopReady = DispatchSemaphore(value: 0)
 
     func start() {
         guard !isRunning else { return }
+        isRunning = true
+        startAudioThread()
+    }
+
+    func stop() {
+        guard isRunning else { return }
+        isRunning = false
+        stopAudioThread()
+    }
+
+    func enqueuePcmData(_ data: Data, sampleRate: UInt32, channels: UInt32) {
+        let rate = Double(sampleRate)
+        let ch = UInt32(channels)
+
+        dataLock.lock()
+        let needsReconfigure = (rate != currentSampleRate || ch != currentChannelCount)
+        if needsReconfigure {
+            currentSampleRate = rate
+            currentChannelCount = ch
+            pendingData.removeAll(keepingCapacity: true)
+        }
+
+        pendingData.append(data)
+
+        // Drop oldest data if buffer exceeds the limit to prevent unbounded growth
+        if pendingData.count > maxPendingBytes {
+            let excess = pendingData.count - maxPendingBytes
+            pendingData.removeFirst(excess)
+        }
+        dataLock.unlock()
+
+        if needsReconfigure {
+            reconfigureQueue()
+        }
+    }
+
+    // MARK: - Dedicated audio thread
+
+    private func startAudioThread() {
+        let thread = Thread { [weak self] in
+            guard let self = self else { return }
+            self.audioRunLoop = CFRunLoopGetCurrent()
+            self.runLoopReady.signal()
+
+            self.setupQueue()
+
+            while self.isRunning {
+                CFRunLoopRunInMode(.defaultMode, 0.25, true)
+            }
+
+            self.teardownQueue()
+        }
+        thread.name = "CoreAudioPlayer"
+        thread.qualityOfService = .userInteractive
+        self.audioThread = thread
+        thread.start()
+        runLoopReady.wait()
+    }
+
+    private func stopAudioThread() {
+        if let rl = audioRunLoop {
+            CFRunLoopStop(rl)
+            audioRunLoop = nil
+        }
+        audioThread = nil
+    }
+
+    // MARK: - AudioQueue management
+
+    private func setupQueue() {
+        dataLock.lock()
+        let rate = currentSampleRate
+        let ch = currentChannelCount
+        dataLock.unlock()
 
         var format = AudioStreamBasicDescription(
-            mSampleRate: sampleRate,
+            mSampleRate: rate,
             mFormatID: kAudioFormatLinearPCM,
             mFormatFlags: kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked,
-            mBytesPerPacket: channelCount * (bitsPerSample / 8),
+            mBytesPerPacket: ch * (bitsPerSample / 8),
             mFramesPerPacket: 1,
-            mBytesPerFrame: channelCount * (bitsPerSample / 8),
-            mChannelsPerFrame: channelCount,
+            mBytesPerFrame: ch * (bitsPerSample / 8),
+            mChannelsPerFrame: ch,
             mBitsPerChannel: bitsPerSample,
             mReserved: 0
         )
 
-        let callbackPointer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        guard let rl = audioRunLoop else { return }
+        let selfPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
 
+        var queue: AudioQueueRef?
         let status = AudioQueueNewOutput(
             &format,
             audioQueueCallback,
-            callbackPointer,
-            CFRunLoopGetCurrent(),
-            CFRunLoopMode.commonModes.rawValue,
+            selfPtr,
+            rl,
+            CFRunLoopMode.defaultMode.rawValue,
             0,
-            &audioQueue
+            &queue
         )
 
-        guard status == noErr, let queue = audioQueue else {
+        guard status == noErr, let q = queue else {
             NSLog("CoreAudioPlayer: Failed to create audio queue: %d", status)
             return
         }
 
+        audioQueue = q
         buffers = Array(repeating: nil, count: bufferCount)
         for i in 0..<bufferCount {
-            AudioQueueAllocateBuffer(queue, bufferSize, &buffers[i])
+            AudioQueueAllocateBuffer(q, bufferSize, &buffers[i])
             if let buffer = buffers[i] {
                 fillBuffer(buffer)
-                AudioQueueEnqueueBuffer(queue, buffer, 0, nil)
+                AudioQueueEnqueueBuffer(q, buffer, 0, nil)
             }
         }
 
-        AudioQueueStart(queue, nil)
-        isRunning = true
+        AudioQueueStart(q, nil)
     }
 
-    func stop() {
-        guard isRunning, let queue = audioQueue else { return }
-        AudioQueueStop(queue, true)
-        AudioQueueDispose(queue, true)
+    private func teardownQueue() {
+        guard let q = audioQueue else { return }
+        AudioQueueStop(q, true)
+        AudioQueueDispose(q, true)
         audioQueue = nil
         buffers = []
-        isRunning = false
     }
 
-    func enqueuePcmData(_ data: Data) {
-        dataLock.lock()
-        pendingData.append(data)
-        dataLock.unlock()
+    private func reconfigureQueue() {
+        guard let rl = audioRunLoop else { return }
+        CFRunLoopPerformBlock(rl, CFRunLoopMode.defaultMode as CFTypeRef) { [weak self] in
+            guard let self = self else { return }
+            self.teardownQueue()
+            self.setupQueue()
+        }
+        CFRunLoopWakeUp(rl)
     }
+
+    // MARK: - Buffer filling
 
     fileprivate func fillNextBuffer(_ buffer: AudioQueueBufferRef) {
         fillBuffer(buffer)
@@ -95,7 +180,6 @@ class CoreAudioPlayer {
             pendingData.removeFirst(bytesToCopy)
             buffer.pointee.mAudioDataByteSize = UInt32(bytesToCopy)
         } else {
-            // Fill silence
             memset(buffer.pointee.mAudioData, 0, Int(bufferSize))
             buffer.pointee.mAudioDataByteSize = bufferSize
         }

@@ -49,6 +49,11 @@ struct ContentView: View {
 
                     Divider()
 
+                    Button(action: { appState.showEditVmDialog = true }) {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                    .disabled(vm.state == .running)
+
                     Button(role: .destructive, action: {
                         appState.deleteVm(id: vmId)
                     }) {
@@ -60,6 +65,12 @@ struct ContentView: View {
         }
         .sheet(isPresented: $appState.showCreateVmDialog) {
             CreateVmDialog()
+        }
+        .sheet(isPresented: $appState.showEditVmDialog) {
+            if let vmId = appState.selectedVmId,
+               let vm = appState.vms.first(where: { $0.id == vmId }) {
+                EditVmDialog(vm: vm)
+            }
         }
     }
 }

@@ -27,7 +27,8 @@ struct VmInfo: Identifiable, Codable {
     let memoryMb: Int
     let cpuCount: Int
     let state: VmState
-    let netLinkUp: Bool
+    let netEnabled: Bool
+    let cmdline: String
 }
 
 struct VmCreateConfig {

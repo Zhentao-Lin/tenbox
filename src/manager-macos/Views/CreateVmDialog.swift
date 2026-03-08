@@ -113,3 +113,83 @@ struct CreateVmDialog: View {
         dismiss()
     }
 }
+
+struct EditVmDialog: View {
+    @EnvironmentObject var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    let vm: VmInfo
+
+    @State private var name: String
+    @State private var memoryMb: Int
+    @State private var cpuCount: Int
+    @State private var netEnabled: Bool
+
+    init(vm: VmInfo) {
+        self.vm = vm
+        _name = State(initialValue: vm.name)
+        _memoryMb = State(initialValue: vm.memoryMb)
+        _cpuCount = State(initialValue: vm.cpuCount)
+        _netEnabled = State(initialValue: vm.netEnabled)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("Edit VM")
+                .font(.title2)
+                .fontWeight(.semibold)
+                .padding()
+
+            Form {
+                Section("General") {
+                    TextField("Name", text: $name)
+                    Stepper("CPUs: \(cpuCount)", value: $cpuCount, in: 1...16)
+                    Stepper("Memory: \(memoryMb) MB", value: $memoryMb, in: 64...16384, step: 128)
+                }
+
+                Section("Network") {
+                    Toggle("Enable NAT Networking", isOn: $netEnabled)
+                }
+
+                Section("Paths (read-only)") {
+                    LabeledContent("Kernel") {
+                        Text(vm.kernelPath)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(.secondary)
+                    }
+                    LabeledContent("Disk") {
+                        Text(vm.diskPath.isEmpty ? "None" : vm.diskPath)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .padding(.horizontal)
+
+            HStack {
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Save") { saveVm() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(name.isEmpty)
+            }
+            .padding()
+        }
+        .frame(width: 450, height: 380)
+    }
+
+    private func saveVm() {
+        appState.editVm(
+            id: vm.id,
+            name: name,
+            memoryMb: memoryMb,
+            cpuCount: cpuCount,
+            netEnabled: netEnabled
+        )
+        dismiss()
+    }
+}

@@ -231,10 +231,18 @@ RuntimeControlService::RuntimeControlService(std::string vm_id, std::string pipe
         std::string encoded = ipc::Encode(event);
         {
             std::lock_guard<std::mutex> lock(send_queue_mutex_);
-            frame_queue_.push_back(std::move(encoded));
-            if (frame_queue_.size() > kMaxPendingFrames) {
-                frame_queue_.pop_front();
+            if (frame_queue_.size() >= kMaxPendingFrames) {
+                size_t dropped = frame_queue_.size();
+                frame_queue_.clear();
+                frame_drop_count_ += dropped;
+                auto now = std::chrono::steady_clock::now();
+                if (now - last_frame_drop_log_ >= std::chrono::seconds(2)) {
+                    last_frame_drop_log_ = now;
+                    LOG_WARN("RuntimeService: frame queue overflow, dropped %zu (total: %llu)",
+                             dropped, static_cast<unsigned long long>(frame_drop_count_));
+                }
             }
+            frame_queue_.push_back(std::move(encoded));
         }
         send_cv_.notify_one();
     });
@@ -419,8 +427,7 @@ bool RuntimeControlService::Start() {
                     audio_queue_.pop_front();
                 }
 
-                size_t frames_to_send = frame_queue_.size();
-                while (frames_to_send-- > 0 && !frame_queue_.empty()) {
+                while (!frame_queue_.empty()) {
                     batch += std::move(frame_queue_.front());
                     frame_queue_.pop_front();
                 }
@@ -774,6 +781,7 @@ void RuntimeControlService::HandleMessage(const ipc::Message& message) {
         if (it_w != message.fields.end() && it_h != message.fields.end() && vm_) {
             uint32_t w = static_cast<uint32_t>(std::strtoul(it_w->second.c_str(), nullptr, 10));
             uint32_t h = static_cast<uint32_t>(std::strtoul(it_h->second.c_str(), nullptr, 10));
+            LOG_INFO("RuntimeService: display.set_size %ux%u", w, h);
             vm_->SetDisplaySize(w, h);
         }
         return;

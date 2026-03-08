@@ -33,6 +33,12 @@ bool Aarch64Machine::SetupPlatformDevices(
     });
     addr_space.AddMmioDevice(kUartBase, Pl011::kMmioSize, &uart_);
 
+    // PL031 RTC
+    rtc_.SetIrqLevelCallback([this](bool asserted) {
+        SetIrqLevel(hv_vm_, kRtcIrq, asserted);
+    });
+    addr_space.AddMmioDevice(kRtcBase, Pl031Rtc::kMmioSize, &rtc_);
+
     return true;
 }
 
@@ -270,6 +276,33 @@ bool Aarch64Machine::LoadKernel(
             reinterpret_cast<const uint8_t*>(cn), sizeof(cn));
     }
     fdt.EndNode();
+
+    // PL031 RTC (arm,pl031 — PrimeCell, needs clocks like PL011)
+    {
+        char rtc_name[64];
+        snprintf(rtc_name, sizeof(rtc_name), "pl031@%llx",
+                 (unsigned long long)kRtcBase);
+        fdt.BeginNode(rtc_name);
+        {
+            const char* compat[] = {"arm,pl031", "arm,primecell"};
+            std::string compat_str;
+            compat_str.append(compat[0], strlen(compat[0]) + 1);
+            compat_str.append(compat[1], strlen(compat[1]) + 1);
+            fdt.AddPropertyBytes("compatible",
+                reinterpret_cast<const uint8_t*>(compat_str.data()),
+                compat_str.size());
+        }
+        fdt.AddPropertyCells("reg", {
+            static_cast<uint32_t>(kRtcBase >> 32),
+            static_cast<uint32_t>(kRtcBase & 0xFFFFFFFF),
+            0, static_cast<uint32_t>(Pl031Rtc::kMmioSize)
+        });
+        fdt.AddPropertyCells("interrupts", {0, kRtcIrq, 4});
+        fdt.AddPropertyCells("clocks", {apb_pclk_phandle});
+        fdt.AddPropertyBytes("clock-names",
+            reinterpret_cast<const uint8_t*>("apb_pclk"), 9);
+        fdt.EndNode();
+    }
 
     // VirtIO MMIO devices
     for (size_t i = 0; i < virtio_slots.size(); i++) {

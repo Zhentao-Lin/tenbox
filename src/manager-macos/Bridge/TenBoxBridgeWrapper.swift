@@ -16,7 +16,8 @@ class TenBoxBridgeWrapper {
                 memoryMb: Int(info.memoryMb),
                 cpuCount: Int(info.cpuCount),
                 state: VmState(rawValue: info.state) ?? .stopped,
-                netLinkUp: info.netLinkUp
+                netEnabled: info.netEnabled,
+                cmdline: info.cmdline
             )
         }
     }
@@ -32,6 +33,10 @@ class TenBoxBridgeWrapper {
         objcConfig.cmdline = config.cmdline
         objcConfig.netEnabled = config.netEnabled
         bridge.createVm(with: objcConfig)
+    }
+
+    func editVm(id: String, name: String, memoryMb: Int, cpuCount: Int, netEnabled: Bool) {
+        bridge.editVm(withId: id, name: name, memoryMb: memoryMb, cpuCount: cpuCount, netEnabled: netEnabled)
     }
 
     func deleteVm(id: String) {

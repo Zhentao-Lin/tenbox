@@ -12,6 +12,9 @@ class VmSession: ObservableObject {
     @Published var runtimeState = ""
     @Published var connected = false
     @Published var displayAspect: CGFloat = 16.0 / 9.0
+    @Published var displaySize: CGSize = .zero
+    @Published var displayInitialized = false
+    @Published var activeTab = 0
 
     private let bridge = TenBoxBridgeWrapper()
     private var connecting = false
@@ -56,16 +59,30 @@ class VmSession: ObservableObject {
 
         ipcClient.onAudio = { [weak self] pcm, rate, channels in
             guard let self = self else { return }
-            self.audioPlayer.sampleRate = Double(rate)
-            self.audioPlayer.channelCount = UInt32(channels)
-            self.audioPlayer.enqueuePcmData(pcm)
+            self.audioPlayer.enqueuePcmData(pcm, sampleRate: rate, channels: UInt32(channels))
         }
 
         ipcClient.onDisplayState = { [weak self] active, w, h in
             guard let self = self else { return }
             if active && w > 0 && h > 0 {
-                self.displayAspect = CGFloat(w) / CGFloat(max(h, 1))
+                let newAspect = CGFloat(w) / CGFloat(max(h, 1))
+                DispatchQueue.main.async {
+                    self.displayAspect = newAspect
+                    if !self.displayInitialized {
+                        self.displayInitialized = true
+                        self.displaySize = CGSize(width: CGFloat(w), height: CGFloat(h))
+                    }
+                    self.activeTab = 2
+                }
             }
+        }
+
+        ipcClient.onDisconnect = { [weak self] in
+            guard let self = self else { return }
+            self.audioPlayer.stop()
+            self.connected = false
+            self.connecting = false
+            self.displayInitialized = false
         }
     }
 
@@ -151,15 +168,13 @@ struct VmDetailView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var session: VmSession
 
-    @State private var selectedTab = 0
-
     init(vm: VmInfo) {
         self.vm = vm
         _session = StateObject(wrappedValue: VmSession(vmId: vm.id))
     }
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: $session.activeTab) {
             InfoView(vm: vm)
                 .tabItem { Label("Info", systemImage: "info.circle") }
                 .tag(0)
@@ -185,7 +200,48 @@ struct VmDetailView: View {
         .onChange(of: vm.state) { _, newState in
             if newState == .running {
                 session.connectIfNeeded()
+                session.activeTab = 1
+            } else if newState == .stopped || newState == .crashed {
+                session.activeTab = 0
             }
         }
+        .onChange(of: session.displaySize) { _, newSize in
+            if newSize.width > 0 && newSize.height > 0 {
+                Self.resizeWindowToFitDisplay(newSize)
+            }
+        }
+    }
+
+    private static func resizeWindowToFitDisplay(_ guestSize: CGSize) {
+        guard let window = NSApplication.shared.keyWindow else { return }
+        guard let screen = window.screen ?? NSScreen.main else { return }
+
+        let scale = screen.backingScaleFactor
+        let pointW = guestSize.width / scale
+        let pointH = guestSize.height / scale
+
+        let chromeHeight = window.frame.height - window.contentLayoutRect.height
+        let chromeWidth = window.frame.width - window.contentLayoutRect.width
+
+        let desiredW = pointW + chromeWidth
+        let desiredH = pointH + chromeHeight
+
+        let maxFrame = screen.visibleFrame
+        let finalW = min(desiredW, maxFrame.width)
+        let finalH = min(desiredH, maxFrame.height)
+
+        // Keep top-left corner fixed.  macOS uses a bottom-left origin, so
+        // when the height changes we must adjust Y to keep the top edge stable.
+        let oldFrame = window.frame
+        let topY = oldFrame.maxY
+        var newX = oldFrame.minX
+        var newY = topY - finalH
+
+        // Clamp to screen visible area.
+        newX = max(maxFrame.minX, min(newX, maxFrame.maxX - finalW))
+        newY = max(maxFrame.minY, min(newY, maxFrame.maxY - finalH))
+
+        let newFrame = NSRect(x: newX, y: newY, width: finalW, height: finalH)
+        window.setFrame(newFrame, display: true, animate: true)
     }
 }
