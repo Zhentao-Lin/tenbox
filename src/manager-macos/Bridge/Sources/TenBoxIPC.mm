@@ -1,6 +1,7 @@
 #import "TenBoxIPC.h"
 #include "ipc/unix_socket.h"
 #include "ipc/protocol_v1.h"
+#include "ipc/shared_framebuffer.h"
 #include <string>
 #include <mutex>
 #include <atomic>
@@ -43,6 +44,8 @@ static std::string HexDecode(const std::string& hex) {
     std::mutex _consoleLock;
     NSMutableString* _consoleBatch;
     std::atomic<bool> _consoleFlushScheduled;
+    // Shared-memory framebuffer for zero-copy frame transport
+    ipc::SharedFramebuffer _shmFb;
 }
 
 - (BOOL)connectToVm:(NSString *)vmId {
@@ -70,6 +73,7 @@ static std::string HexDecode(const std::string& hex) {
         _recvThread.join();
     }
     _connection.reset();
+    _shmFb.Close();
 }
 
 - (BOOL)isConnected {
@@ -352,7 +356,47 @@ static std::string HexDecode(const std::string& hex) {
         return (fi != msg.fields.end()) ? static_cast<uint32_t>(std::strtoul(fi->second.c_str(), nullptr, 10)) : 0;
     };
 
-    if (msg.type == "display.frame") {
+    if (msg.type == "display.shm_init") {
+        auto ni = msg.fields.find("shm_name");
+        if (ni == msg.fields.end()) return;
+        uint32_t w = getU32("width");
+        uint32_t h = getU32("height");
+        if (w == 0 || h == 0) return;
+        _shmFb.Close();
+        if (!_shmFb.Open(ni->second, w, h)) {
+            NSLog(@"[IPC] failed to open shared framebuffer: %s %ux%u",
+                  ni->second.c_str(), w, h);
+        }
+    }
+    else if (msg.type == "display.frame_ready") {
+        uint32_t w = getU32("width");
+        uint32_t h = getU32("height");
+        uint32_t stride = getU32("stride");
+        uint32_t resW = getU32("resource_width");
+        uint32_t resH = getU32("resource_height");
+        uint32_t dirtyX = getU32("dirty_x");
+        uint32_t dirtyY = getU32("dirty_y");
+        if (resW == 0) resW = w;
+        if (resH == 0) resH = h;
+        if (w == 0 || h == 0 || stride == 0) return;
+        if (!_shmFb.IsValid() || _shmFb.width() != resW || _shmFb.height() != resH) return;
+
+        // Zero-copy: wrap SHM pointer directly into NSData.
+        // Point to the first row of the dirty rect; pass the full SHM stride
+        // so Metal's texture.replace can stride-skip between rows.
+        uint32_t shm_stride = _shmFb.stride();
+        size_t offset = static_cast<size_t>(dirtyY) * shm_stride +
+                        static_cast<size_t>(dirtyX) * 4;
+        size_t needed = static_cast<size_t>(h - 1) * shm_stride + static_cast<size_t>(w) * 4;
+        if (offset + needed > _shmFb.size()) return;
+
+        NSData* pixels = [NSData dataWithBytesNoCopy:_shmFb.data() + offset
+                                              length:needed
+                                        freeWhenDone:NO];
+        fh(pixels, w, h, shm_stride, resW, resH, dirtyX, dirtyY);
+    }
+    else if (msg.type == "display.frame") {
+        // Legacy fallback path: frame data sent via IPC payload.
         uint32_t w = getU32("width");
         uint32_t h = getU32("height");
         uint32_t stride = getU32("stride");

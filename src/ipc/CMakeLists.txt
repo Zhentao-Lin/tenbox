@@ -5,6 +5,7 @@ set(TENBOX_IPC_SOURCES
 if(NOT WIN32)
     list(APPEND TENBOX_IPC_SOURCES
         ${CMAKE_SOURCE_DIR}/src/ipc/unix_socket.cpp
+        ${CMAKE_SOURCE_DIR}/src/ipc/shared_framebuffer_posix.cpp
     )
 endif()
 

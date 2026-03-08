@@ -3,6 +3,7 @@
 #include "common/ports.h"
 #include "ipc/ipc_transport.h"
 #include "ipc/protocol_v1.h"
+#include "ipc/shared_framebuffer.h"
 
 #include <atomic>
 #include <chrono>
@@ -140,8 +141,12 @@ private:
     std::condition_variable send_cv_;
     std::deque<std::string> console_queue_;
 
-    // Bounded queue for display frames.  When overflow occurs, all older
-    // frames are discarded and only the newest is kept.
+    // Shared-memory framebuffer for zero-copy frame transport.
+    ipc::SharedFramebuffer shm_fb_;
+    uint64_t shm_frame_seq_ = 0;
+    bool shm_init_sent_ = false;
+
+    // Legacy frame queue (fallback when shm is unavailable).
     static constexpr size_t kMaxPendingFrames = 4;
     std::deque<std::string> frame_queue_;
     uint64_t frame_drop_count_ = 0;

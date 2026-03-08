@@ -42,7 +42,8 @@ let package = Package(
             exclude: ["IpcClientWrapper.swift", "Models.swift",
                        "TenBoxBridgeWrapper.swift", "TenBox-Bridging-Header.h"],
             sources: ["Sources/TenBoxBridge.mm", "Sources/TenBoxIPC.mm",
-                       "Sources/ipc/unix_socket.cpp", "Sources/ipc/protocol_v1.cpp"],
+                       "Sources/ipc/unix_socket.cpp", "Sources/ipc/protocol_v1.cpp",
+                       "Sources/ipc/shared_framebuffer_posix.cpp"],
             publicHeadersPath: "include",
             cxxSettings: [
                 .headerSearchPath("Sources"),

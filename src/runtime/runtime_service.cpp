@@ -212,36 +212,80 @@ RuntimeControlService::RuntimeControlService(std::string vm_id, std::string pipe
     });
 
     display_port_->SetFrameHandler([this](DisplayFrame frame) {
-        ipc::Message event;
-        event.kind = ipc::Kind::kEvent;
-        event.channel = ipc::Channel::kDisplay;
-        event.type = "display.frame";
-        event.vm_id = vm_id_;
-        event.request_id = next_event_id_++;
-        event.fields["width"] = std::to_string(frame.width);
-        event.fields["height"] = std::to_string(frame.height);
-        event.fields["stride"] = std::to_string(frame.stride);
-        event.fields["format"] = std::to_string(frame.format);
-        event.fields["resource_width"] = std::to_string(frame.resource_width);
-        event.fields["resource_height"] = std::to_string(frame.resource_height);
-        event.fields["dirty_x"] = std::to_string(frame.dirty_x);
-        event.fields["dirty_y"] = std::to_string(frame.dirty_y);
-        event.payload = std::move(frame.pixels);
+        uint32_t resW = frame.resource_width ? frame.resource_width : frame.width;
+        uint32_t resH = frame.resource_height ? frame.resource_height : frame.height;
 
-        std::string encoded = ipc::Encode(event);
+        // Create or resize shared framebuffer when resource dimensions change.
+        if (!shm_fb_.IsValid() || shm_fb_.width() != resW || shm_fb_.height() != resH) {
+            std::string shm_name = ipc::GetSharedFramebufferName(vm_id_);
+            if (shm_fb_.IsValid()) {
+                shm_fb_.Close();
+            }
+            if (!shm_fb_.Create(shm_name, resW, resH)) {
+                LOG_ERROR("RuntimeService: failed to create shared framebuffer %ux%u", resW, resH);
+                return;
+            }
+            shm_init_sent_ = false;
+            shm_frame_seq_ = 0;
+        }
+
+        // Send shm_init notification so the manager can open the mapping.
+        if (!shm_init_sent_) {
+            ipc::Message init;
+            init.kind = ipc::Kind::kEvent;
+            init.channel = ipc::Channel::kDisplay;
+            init.type = "display.shm_init";
+            init.vm_id = vm_id_;
+            init.request_id = next_event_id_++;
+            init.fields["shm_name"] = shm_fb_.name();
+            init.fields["width"] = std::to_string(resW);
+            init.fields["height"] = std::to_string(resH);
+            Send(init);
+            shm_init_sent_ = true;
+        }
+
+        // Blit dirty rect into shared memory.
+        uint32_t dx = frame.dirty_x;
+        uint32_t dy = frame.dirty_y;
+        uint32_t dw = frame.width;
+        uint32_t dh = frame.height;
+        uint32_t src_stride = frame.stride;
+        uint32_t dst_stride = shm_fb_.stride();
+        const uint8_t* src = frame.pixels.data();
+        uint8_t* dst = shm_fb_.data();
+
+        for (uint32_t row = 0; row < dh; ++row) {
+            size_t src_off = static_cast<size_t>(row) * src_stride;
+            size_t dst_off = static_cast<size_t>(dy + row) * dst_stride +
+                             static_cast<size_t>(dx) * 4;
+            if (src_off + dw * 4 > frame.pixels.size()) break;
+            if (dst_off + dw * 4 > shm_fb_.size()) break;
+            std::memcpy(dst + dst_off, src + src_off, dw * 4);
+        }
+
+        // Send lightweight metadata-only notification.
+        uint64_t seq = ++shm_frame_seq_;
+        ipc::Message notify;
+        notify.kind = ipc::Kind::kEvent;
+        notify.channel = ipc::Channel::kDisplay;
+        notify.type = "display.frame_ready";
+        notify.vm_id = vm_id_;
+        notify.request_id = next_event_id_++;
+        notify.fields["width"] = std::to_string(dw);
+        notify.fields["height"] = std::to_string(dh);
+        notify.fields["stride"] = std::to_string(dst_stride);
+        notify.fields["format"] = std::to_string(frame.format);
+        notify.fields["resource_width"] = std::to_string(resW);
+        notify.fields["resource_height"] = std::to_string(resH);
+        notify.fields["dirty_x"] = std::to_string(dx);
+        notify.fields["dirty_y"] = std::to_string(dy);
+        notify.fields["seq"] = std::to_string(seq);
+
+        std::string encoded = ipc::Encode(notify);
         {
             std::lock_guard<std::mutex> lock(send_queue_mutex_);
-            if (frame_queue_.size() >= kMaxPendingFrames) {
-                size_t dropped = frame_queue_.size();
-                frame_queue_.clear();
-                frame_drop_count_ += dropped;
-                auto now = std::chrono::steady_clock::now();
-                if (now - last_frame_drop_log_ >= std::chrono::seconds(2)) {
-                    last_frame_drop_log_ = now;
-                    LOG_WARN("RuntimeService: frame queue overflow, dropped %zu (total: %llu)",
-                             dropped, static_cast<unsigned long long>(frame_drop_count_));
-                }
-            }
+            // Shared-memory path: only keep the latest notification.
+            frame_queue_.clear();
             frame_queue_.push_back(std::move(encoded));
         }
         send_cv_.notify_one();
