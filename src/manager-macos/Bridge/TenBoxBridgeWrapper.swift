@@ -30,7 +30,6 @@ class TenBoxBridgeWrapper {
         objcConfig.diskPath = config.diskPath
         objcConfig.memoryMb = config.memoryMb
         objcConfig.cpuCount = config.cpuCount
-        objcConfig.cmdline = config.cmdline
         objcConfig.netEnabled = config.netEnabled
         bridge.createVm(with: objcConfig)
     }

@@ -163,7 +163,6 @@ static NSString* GetVmsDir() {
         @"disk_path": config.diskPath ?: @"",
         @"memory_mb": @(config.memoryMb),
         @"cpu_count": @(config.cpuCount),
-        @"cmdline": config.cmdline ?: @"",
         @"net_enabled": @(config.netEnabled),
         @"state": @"stopped",
     };

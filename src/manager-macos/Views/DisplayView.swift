@@ -5,6 +5,17 @@ struct DisplayView: View {
     @ObservedObject var session: VmSession
     @StateObject private var viewModel = DisplayViewModel()
 
+    private static func updateChromeExtra(viewSize: CGSize) {
+        guard viewSize.width > 0 && viewSize.height > 0,
+              let window = NSApplication.shared.keyWindow else { return }
+        let extraW = window.frame.width - viewSize.width
+        let extraH = window.frame.height - viewSize.height
+        if extraW > 0 && extraH > 0 {
+            VmDetailView.chromeExtraW = extraW
+            VmDetailView.chromeExtraH = extraH
+        }
+    }
+
     var body: some View {
         GeometryReader { geo in
             ZStack {
@@ -13,9 +24,7 @@ struct DisplayView: View {
                     inputHandler: viewModel.inputHandler,
                     guestCursor: viewModel.guestCursor
                 )
-                .aspectRatio(session.displayAspect, contentMode: .fit)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
                 .onAppear {
                     viewModel.attach(to: session)
                 }
@@ -32,16 +41,19 @@ struct DisplayView: View {
                     }
                 }
             }
-            .onChange(of: geo.size) { _, newSize in
-                viewModel.displaySizeChanged(newSize, client: session.ipcClient)
-            }
-            .onChange(of: session.connected) { _, connected in
-                if connected {
-                    viewModel.displaySizeChanged(geo.size, client: session.ipcClient)
-                }
-            }
             .onAppear {
-                viewModel.displaySizeChanged(geo.size, client: session.ipcClient)
+                session.displayViewSize = geo.size
+                Self.updateChromeExtra(viewSize: geo.size)
+            }
+            .onChange(of: geo.size) { _, newSize in
+                session.displayViewSize = newSize
+                Self.updateChromeExtra(viewSize: newSize)
+                if session.displayInitialized {
+                    let elapsed = CACurrentMediaTime() - session.lastResizeFromVmTime
+                    if elapsed > 1.0 {
+                        viewModel.notifyDisplaySizeIfNeeded(newSize, session: session)
+                    }
+                }
             }
         }
     }
@@ -69,21 +81,27 @@ class DisplayViewModel: ObservableObject {
         session = nil
     }
 
-    func displaySizeChanged(_ size: CGSize, client: IpcClientWrapper) {
+    func notifyDisplaySizeIfNeeded(_ size: CGSize, session: VmSession) {
+        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+        var w = UInt32(size.width * scale)
+        let h = UInt32(size.height * scale)
+        w = (w + 7) & ~7
+        guard w > 0 && h > 0 else { return }
+
         resizeTimer?.invalidate()
-        resizeTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak client] _ in
-            guard let client = client, client.isConnected else {
+        resizeTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak session] _ in
+            guard let session = session else { return }
+            let client = session.ipcClient
+            guard client.isConnected else {
                 print("[DisplayView] resize ignored: client disconnected")
                 return
             }
-            let scale = NSScreen.main?.backingScaleFactor ?? 2.0
-            var w = UInt32(size.width * scale)
-            let h = UInt32(size.height * scale)
-            w = (w + 7) & ~7
-            if w > 0 && h > 0 {
-                print("[DisplayView] sending display.set_size \(w)x\(h) (view: \(size.width)x\(size.height), scale: \(scale))")
-                client.sendDisplaySetSize(width: w, height: h)
-            }
+            let elapsed = CACurrentMediaTime() - session.lastResizeFromVmTime
+            guard elapsed > 1.0 else { return }
+            session.lastSentDisplayW = w
+            session.lastSentDisplayH = h
+            print("[DisplayView] sending display.set_size \(w)x\(h) (view: \(size.width)x\(size.height), scale: \(scale))")
+            client.sendDisplaySetSize(width: w, height: h)
         }
     }
 

@@ -38,6 +38,5 @@ struct VmCreateConfig {
     let diskPath: String
     let memoryMb: Int
     let cpuCount: Int
-    let cmdline: String
     let netEnabled: Bool
 }

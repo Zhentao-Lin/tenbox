@@ -11,9 +11,12 @@ class VmSession: ObservableObject {
     @Published var guestAgentConnected = false
     @Published var runtimeState = ""
     @Published var connected = false
-    @Published var displayAspect: CGFloat = 16.0 / 9.0
     @Published var displaySize: CGSize = .zero
     @Published var displayInitialized = false
+    var lastSentDisplayW: UInt32 = 0
+    var lastSentDisplayH: UInt32 = 0
+    var lastResizeFromVmTime: CFTimeInterval = 0
+    var displayViewSize: CGSize = .zero
     @Published var activeTab = 0
 
     private let bridge = TenBoxBridgeWrapper()
@@ -39,10 +42,6 @@ class VmSession: ObservableObject {
 
         ipcClient.onFrame = { [weak self] pixels, w, h, stride, resW, resH, dirtyX, dirtyY in
             guard let self = self, let renderer = self.renderer else { return }
-            let newAspect = CGFloat(resW) / CGFloat(max(resH, 1))
-            if abs(self.displayAspect - newAspect) > 0.01 {
-                DispatchQueue.main.async { self.displayAspect = newAspect }
-            }
             pixels.withUnsafeBytes { ptr in
                 renderer.blitDirtyRect(
                     pixels: ptr.baseAddress!,
@@ -65,14 +64,19 @@ class VmSession: ObservableObject {
         ipcClient.onDisplayState = { [weak self] active, w, h in
             guard let self = self else { return }
             if active && w > 0 && h > 0 {
-                let newAspect = CGFloat(w) / CGFloat(max(h, 1))
+                let newSize = CGSize(width: CGFloat(w), height: CGFloat(h))
                 DispatchQueue.main.async {
-                    self.displayAspect = newAspect
-                    if !self.displayInitialized {
-                        self.displayInitialized = true
-                        self.displaySize = CGSize(width: CGFloat(w), height: CGFloat(h))
+                    let wasInitialized = self.displayInitialized
+                    self.displayInitialized = true
+                    self.lastSentDisplayW = (w + 7) & ~7
+                    self.lastSentDisplayH = h
+                    self.lastResizeFromVmTime = CACurrentMediaTime()
+                    if !wasInitialized {
+                        self.activeTab = 2
                     }
-                    self.activeTab = 2
+                    if self.displaySize != newSize {
+                        self.displaySize = newSize
+                    }
                 }
             }
         }
@@ -164,6 +168,13 @@ class VmSession: ObservableObject {
 }
 
 struct VmDetailView: View {
+    private static let minimumDisplayViewSize = CGSize(width: 320, height: 200)
+    // Chrome = everything between the NSWindow frame and the DisplayView
+    // (title bar + sidebar + tab bar + padding). Updated whenever
+    // GeometryReader in DisplayView reports a fresh, trustworthy size.
+    static var chromeExtraW: CGFloat = 207
+    static var chromeExtraH: CGFloat = 84
+
     let vm: VmInfo
     @EnvironmentObject var appState: AppState
     @ObservedObject private var session: VmSession
@@ -192,23 +203,26 @@ struct VmDetailView: View {
             if vm.state == .running {
                 session.connectIfNeeded()
             }
+            if session.displayInitialized,
+               session.displaySize.width > 0, session.displaySize.height > 0 {
+                Self.resizeWindowToFitDisplay(session.displaySize, session: session)
+            }
         }
-        .onChange(of: vm.state) { _, newState in
-            if newState == .running {
+        .onChange(of: vm.state) { oldState, newState in
+            if newState == .running && oldState != .running {
                 session.connectIfNeeded()
-                session.activeTab = 1
             } else if newState == .stopped || newState == .crashed {
                 session.activeTab = 0
             }
         }
         .onChange(of: session.displaySize) { _, newSize in
             if newSize.width > 0 && newSize.height > 0 {
-                Self.resizeWindowToFitDisplay(newSize)
+                Self.resizeWindowToFitDisplay(newSize, session: session)
             }
         }
     }
 
-    private static func resizeWindowToFitDisplay(_ guestSize: CGSize) {
+    private static func resizeWindowToFitDisplay(_ guestSize: CGSize, session: VmSession) {
         guard let window = NSApplication.shared.keyWindow else { return }
         guard let screen = window.screen ?? NSScreen.main else { return }
 
@@ -216,28 +230,36 @@ struct VmDetailView: View {
         let pointW = guestSize.width / scale
         let pointH = guestSize.height / scale
 
-        let chromeHeight = window.frame.height - window.contentLayoutRect.height
-        let chromeWidth = window.frame.width - window.contentLayoutRect.width
+        let extraW = Self.chromeExtraW
+        let extraH = Self.chromeExtraH
 
-        let desiredW = pointW + chromeWidth
-        let desiredH = pointH + chromeHeight
+        let desiredW = pointW + extraW
+        let desiredH = pointH + extraH
+
+        let minDisplayW = min(pointW, Self.minimumDisplayViewSize.width)
+        let minDisplayH = min(pointH, Self.minimumDisplayViewSize.height)
+        let minFrameW = extraW + minDisplayW
+        let minFrameH = extraH + minDisplayH
+
+        window.minSize = NSSize(width: minFrameW, height: minFrameH)
+
+        print("[resizeWindow] guest=\(guestSize.width)x\(guestSize.height) scale=\(scale) pointSize=\(pointW)x\(pointH)")
+        print("[resizeWindow] chrome=\(extraW)x\(extraH) desired=\(desiredW)x\(desiredH)")
 
         let maxFrame = screen.visibleFrame
-        let finalW = min(desiredW, maxFrame.width)
-        let finalH = min(desiredH, maxFrame.height)
+        let finalW = max(minFrameW, min(desiredW, maxFrame.width))
+        let finalH = max(minFrameH, min(desiredH, maxFrame.height))
 
-        // Keep top-left corner fixed.  macOS uses a bottom-left origin, so
-        // when the height changes we must adjust Y to keep the top edge stable.
         let oldFrame = window.frame
         let topY = oldFrame.maxY
         var newX = oldFrame.minX
         var newY = topY - finalH
 
-        // Clamp to screen visible area.
         newX = max(maxFrame.minX, min(newX, maxFrame.maxX - finalW))
         newY = max(maxFrame.minY, min(newY, maxFrame.maxY - finalH))
 
         let newFrame = NSRect(x: newX, y: newY, width: finalW, height: finalH)
-        window.setFrame(newFrame, display: true, animate: true)
+        print("[resizeWindow] final=\(finalW)x\(finalH)")
+        window.setFrame(newFrame, display: true, animate: false)
     }
 }

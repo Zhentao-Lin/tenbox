@@ -1,5 +1,8 @@
 import SwiftUI
 
+private let hostMaxCpus = ProcessInfo.processInfo.activeProcessorCount
+private let hostMaxMemoryGb = max(1, Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)))
+
 struct CreateVmDialog: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -8,9 +11,8 @@ struct CreateVmDialog: View {
     @State private var kernelPath = ""
     @State private var initrdPath = ""
     @State private var diskPath = ""
-    @State private var memoryMb: Int = 512
-    @State private var cpuCount: Int = 2
-    @State private var cmdline = ""
+    @State private var memoryGb: Int = min(4, hostMaxMemoryGb)
+    @State private var cpuCount: Int = min(4, hostMaxCpus)
     @State private var netEnabled = true
 
     var body: some View {
@@ -23,8 +25,8 @@ struct CreateVmDialog: View {
             Form {
                 Section("General") {
                     TextField("Name", text: $name)
-                    Stepper("CPUs: \(cpuCount)", value: $cpuCount, in: 1...16)
-                    Stepper("Memory: \(memoryMb) MB", value: $memoryMb, in: 64...16384, step: 128)
+                    Stepper("CPUs: \(cpuCount)", value: $cpuCount, in: 1...hostMaxCpus)
+                    Stepper("Memory: \(memoryGb) GB", value: $memoryGb, in: 1...hostMaxMemoryGb)
                 }
 
                 Section("Boot") {
@@ -36,8 +38,6 @@ struct CreateVmDialog: View {
                         TextField("Initrd (optional)", text: $initrdPath)
                         Button("Browse...") { browseInitrd() }
                     }
-                    TextField("Kernel cmdline", text: $cmdline)
-                        .font(.system(.body, design: .monospaced))
                 }
 
                 Section("Storage") {
@@ -104,9 +104,8 @@ struct CreateVmDialog: View {
             kernelPath: kernelPath,
             initrdPath: initrdPath,
             diskPath: diskPath,
-            memoryMb: memoryMb,
+            memoryMb: memoryGb * 1024,
             cpuCount: cpuCount,
-            cmdline: cmdline,
             netEnabled: netEnabled
         )
         appState.createVm(config: config)
@@ -121,14 +120,14 @@ struct EditVmDialog: View {
     let vm: VmInfo
 
     @State private var name: String
-    @State private var memoryMb: Int
+    @State private var memoryGb: Int
     @State private var cpuCount: Int
     @State private var netEnabled: Bool
 
     init(vm: VmInfo) {
         self.vm = vm
         _name = State(initialValue: vm.name)
-        _memoryMb = State(initialValue: vm.memoryMb)
+        _memoryGb = State(initialValue: max(1, vm.memoryMb / 1024))
         _cpuCount = State(initialValue: vm.cpuCount)
         _netEnabled = State(initialValue: vm.netEnabled)
     }
@@ -143,8 +142,8 @@ struct EditVmDialog: View {
             Form {
                 Section("General") {
                     TextField("Name", text: $name)
-                    Stepper("CPUs: \(cpuCount)", value: $cpuCount, in: 1...16)
-                    Stepper("Memory: \(memoryMb) MB", value: $memoryMb, in: 64...16384, step: 128)
+                    Stepper("CPUs: \(cpuCount)", value: $cpuCount, in: 1...hostMaxCpus)
+                    Stepper("Memory: \(memoryGb) GB", value: $memoryGb, in: 1...hostMaxMemoryGb)
                 }
 
                 Section("Network") {
@@ -186,7 +185,7 @@ struct EditVmDialog: View {
         appState.editVm(
             id: vm.id,
             name: name,
-            memoryMb: memoryMb,
+            memoryMb: memoryGb * 1024,
             cpuCount: cpuCount,
             netEnabled: netEnabled
         )

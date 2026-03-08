@@ -25,7 +25,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy) NSString *diskPath;
 @property (nonatomic, assign) NSInteger memoryMb;
 @property (nonatomic, assign) NSInteger cpuCount;
-@property (nonatomic, copy) NSString *cmdline;
 @property (nonatomic, assign) BOOL netEnabled;
 @end
 
