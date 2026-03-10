@@ -4,7 +4,6 @@ if(WIN32)
         ${CMAKE_SOURCE_DIR}/src/platform/windows/hypervisor/whvp_vm.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/hypervisor/whvp_vcpu.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/console/std_console_port.cpp
-        ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipe_transport.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/shared_framebuffer_win32.cpp
         ${CMAKE_SOURCE_DIR}/src/platform/windows/vm_platform_win.cpp
     )

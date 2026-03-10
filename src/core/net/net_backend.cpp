@@ -21,6 +21,10 @@ extern "C" {
 #include <memory>
 #include <algorithm>
 
+#ifdef _WIN32
+#include <icmpapi.h>
+#endif
+
 
 // ============================================================
 // Monotonic time (milliseconds)
@@ -100,8 +104,22 @@ bool NetBackend::Start(VirtioNetDevice* dev,
 void NetBackend::Stop() {
     if (!running_) return;
     running_ = false;
+#ifdef _WIN32
+    if (icmp_running_) {
+        icmp_running_ = false;
+        icmp_cv_.notify_all();
+        if (icmp_thread_.joinable())
+            icmp_thread_.join();
+    }
+#endif
     uv_async_send(&stop_wakeup_);
     if (net_thread_.joinable()) net_thread_.join();
+#ifdef _WIN32
+    if (icmp_handle_) {
+        IcmpCloseHandle(icmp_handle_);
+        icmp_handle_ = nullptr;
+    }
+#endif
 }
 
 void NetBackend::SetLinkUp(bool up) {
@@ -215,6 +233,17 @@ void NetBackend::OnCleanupTimer(uv_timer_t* handle) {
                 && !c.poll.active() && !c.poll.closing();
         });
     }
+    // Close stale DNS relay sessions that never received a response
+    uint64_t now = GetMonotonicMs();
+    for (auto& s : self->dns_sessions_) {
+        if ((now - s->created_ms) > 10000 && !s->poll.closing()) {
+            s->poll.Close();
+            if (s->host_socket != ~(uintptr_t)0) {
+                SOCK_CLOSE(static_cast<SocketHandle>(s->host_socket));
+                s->host_socket = ~(uintptr_t)0;
+            }
+        }
+    }
 }
 
 void NetBackend::OnTxReady(uv_async_t* handle) {
@@ -245,6 +274,7 @@ void NetBackend::OnStopSignal(uv_async_t* handle) {
         if (e->conn_pcb) { tcp_abort(static_cast<struct tcp_pcb*>(e->conn_pcb)); e->conn_pcb = nullptr; }
     }
 
+#ifndef _WIN32
     if (self->icmp_poll_active_) {
         uv_poll_stop(&self->icmp_poll_);
         self->icmp_poll_active_ = false;
@@ -252,6 +282,15 @@ void NetBackend::OnStopSignal(uv_async_t* handle) {
     if (self->icmp_socket_ != ~(uintptr_t)0) {
         SOCK_CLOSE(static_cast<SocketHandle>(self->icmp_socket_));
         self->icmp_socket_ = ~(uintptr_t)0;
+    }
+#endif
+
+    for (auto& ds : self->dns_sessions_) {
+        ds->poll.Close();
+        if (ds->host_socket != ~(uintptr_t)0) {
+            SOCK_CLOSE(static_cast<SocketHandle>(ds->host_socket));
+            ds->host_socket = ~(uintptr_t)0;
+        }
     }
 
     for (auto& pf : self->port_forwards_) {
@@ -378,6 +417,7 @@ void NetBackend::NetworkThread() {
     uv_run(&loop_, UV_RUN_DEFAULT);
 
     nat_entries_.clear();
+    dns_sessions_.clear();
     for (auto& pf : port_forwards_)
         pf.conns.clear();
 
@@ -420,6 +460,21 @@ void NetBackend::ProcessPendingTx() {
 
         auto* ip = reinterpret_cast<IpHdr*>(frame.data() + sizeof(EthHdr));
         uint32_t dst = ntohl(ip->dst_ip);
+
+        // Intercept DNS queries (UDP port 53) to the gateway and relay them
+        // to the host's current nameserver so network changes are transparent.
+        if (dst == kGatewayIp && ip->proto == IPPROTO_UDP) {
+            uint32_t ip_hdr_len_g = (ip->ver_ihl & 0xF) * 4;
+            if (frame.size() >= sizeof(EthHdr) + ip_hdr_len_g + sizeof(UdpHdr)) {
+                auto* udp_g = reinterpret_cast<UdpHdr*>(
+                    frame.data() + sizeof(EthHdr) + ip_hdr_len_g);
+                if (ntohs(udp_g->dst_port) == 53) {
+                    HandleDnsQuery(frame.data(), static_cast<uint32_t>(frame.size()),
+                                   ip_hdr_len_g, ntohs(udp_g->src_port));
+                    continue;
+                }
+            }
+        }
 
         // Packets to gateway: feed directly to lwIP
         if (dst == kGatewayIp) {

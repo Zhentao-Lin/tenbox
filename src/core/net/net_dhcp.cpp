@@ -11,7 +11,7 @@
 // Host DNS resolver lookup
 // ============================================================
 
-static uint32_t GetHostDnsServer() {
+uint32_t NetBackend::GetHostDnsServer() {
 #ifdef _WIN32
     ULONG buf_len = sizeof(FIXED_INFO);
     auto buf = std::make_unique<uint8_t[]>(buf_len);
@@ -156,10 +156,10 @@ void NetBackend::SendDhcpReply(uint8_t type, uint32_t xid,
     // Router (gateway)
     *opt++ = 3; *opt++ = 4;
     memcpy(opt, &gw_net, 4); opt += 4;
-    // DNS
+    // DNS — advertise the gateway as the DNS server so DNS queries go through
+    // our relay, which resolves via the host's current nameserver at query time.
     *opt++ = 6; *opt++ = 4;
-    uint32_t dns = htonl(GetHostDnsServer());
-    memcpy(opt, &dns, 4); opt += 4;
+    memcpy(opt, &gw_net, 4); opt += 4;
     // End
     *opt++ = 255;
     off = static_cast<uint32_t>(opt - pkt);

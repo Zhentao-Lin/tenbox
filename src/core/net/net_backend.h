@@ -85,13 +85,43 @@ private:
     void DetachAndCloseLwipPcb(NatEntry* e);
     void TeardownNatEntry(NatEntry* e);
 
+    // DNS relay (gateway acts as DNS proxy, forwarding to host's current nameserver)
+    void HandleDnsQuery(const uint8_t* frame, uint32_t len,
+                        uint32_t ip_hdr_len, uint16_t src_port);
+    void HandleDnsReadable(uintptr_t sock, uint16_t guest_src_port);
+    static uint32_t GetHostDnsServer();
+
+    struct DnsSession {
+        NetBackend* backend = nullptr;
+        uintptr_t host_socket = ~(uintptr_t)0;
+        uint16_t guest_src_port = 0;
+        PollHandle poll;
+        uint64_t created_ms = 0;
+    };
+    std::vector<std::unique_ptr<DnsSession>> dns_sessions_;
+
     // ICMP relay
     void HandleIcmpOut(uint32_t src_ip, uint32_t dst_ip,
                        const uint8_t* icmp_data, uint32_t icmp_len);
+#ifdef _WIN32
+    void IcmpWorkerThread();
+    struct IcmpRequest {
+        uint32_t src_ip;
+        uint32_t dst_ip;
+        std::vector<uint8_t> icmp_data;
+    };
+    std::mutex icmp_mutex_;
+    std::vector<IcmpRequest> icmp_queue_;
+    std::condition_variable icmp_cv_;
+    std::thread icmp_thread_;
+    std::atomic<bool> icmp_running_{false};
+    void* icmp_handle_ = nullptr;   // HANDLE from IcmpCreateFile
+#else
     void HandleIcmpReadable();
     uintptr_t icmp_socket_ = ~(uintptr_t)0;
     uv_poll_t icmp_poll_{};
     bool icmp_poll_active_ = false;
+#endif
 
     std::vector<uint16_t> SetupPortForwards();
 
