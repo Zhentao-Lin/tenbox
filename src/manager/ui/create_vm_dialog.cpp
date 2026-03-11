@@ -949,6 +949,7 @@ static LRESULT CALLBACK DlgSubclassProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
                 if (data->mgr->CreateVm(req, &error)) {
                     data->created = true;
                     data->closed = true;
+                    EnableWindow(GetWindow(dlg, GW_OWNER), TRUE);
                     DestroyWindow(dlg);
                 } else {
                     MessageBoxW(dlg, i18n::to_wide(error).c_str(), i18n::tr_w(i18n::S::kError).c_str(), MB_OK | MB_ICONERROR);
@@ -964,6 +965,7 @@ static LRESULT CALLBACK DlgSubclassProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
             data->cancel_download = true;
         }
         data->closed = true;
+        EnableWindow(GetWindow(dlg, GW_OWNER), TRUE);
         DestroyWindow(dlg);
         return 0;
 
@@ -1228,7 +1230,6 @@ bool ShowCreateVmDialog2(HWND parent, ManagerService& mgr, std::string* error) {
     }
 
     EnableWindow(parent, TRUE);
-    SetForegroundWindow(parent);
 
     if (error) *error = data.error;
     return data.created;
