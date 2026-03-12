@@ -23,7 +23,6 @@ class TenBoxBridgeWrapper {
                 cpuCount: Int(info.cpuCount),
                 state: VmState(rawValue: info.state) ?? .stopped,
                 netEnabled: info.netEnabled,
-                cmdline: info.cmdline,
                 sharedFolders: folders,
                 portForwards: pfs,
                 displayScale: max(1, min(2, Int(info.displayScale)))

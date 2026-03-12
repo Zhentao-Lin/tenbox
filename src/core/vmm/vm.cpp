@@ -25,7 +25,11 @@ static std::unique_ptr<MachineModel> CreateMachineModel() {
 
 static std::string GetDefaultCmdline(bool debug_mode) {
 #ifdef __aarch64__
-    return "console=ttyAMA0 earlycon root=/dev/vda1 rw";
+    if (debug_mode) {
+        return "console=ttyAMA0 earlycon root=/dev/vda1 rw";
+    } else {
+        return "console=ttyAMA0 quiet loglevel=4 earlycon root=/dev/vda1 rw";
+    }
 #else
     if (debug_mode) {
         return "console=ttyS0 earlyprintk=serial lapic tsc=reliable clocksource=kvm-clock no_timer_check i8042.noprobe";
@@ -225,11 +229,9 @@ void Vm::FinalizeBoot(const VmConfig& config) {
         return;
     }
 
-    if (!machine_->SetupBootVCpu(vcpus_[0].get(), mem_.base)) {
-        LOG_ERROR("Failed to set initial vCPU registers");
-        RequestStop();
-        return;
-    }
+    // NOTE: SetupBootVCpu is called from vCPU 0's own thread (after
+    // boot_complete_) because HVF requires register writes to happen on the
+    // thread that created the vCPU.
 }
 
 bool Vm::AllocateMemory(uint64_t size) {
@@ -504,12 +506,22 @@ void Vm::VCpuThreadFunc(uint32_t vcpu_index) {
     vcpus_ready_.fetch_add(1);
     boot_cv_.notify_all();
 
-    // Wait for FinalizeBoot (kernel load + BSP register setup) to complete.
+    // Wait for FinalizeBoot (kernel load) to complete.
     {
         std::unique_lock<std::mutex> lock(boot_mutex_);
         boot_cv_.wait(lock, [this] { return boot_complete_ || !running_; });
     }
     if (!running_) return;
+
+    // BSP (vCPU 0) sets its own boot registers on this thread, because HVF
+    // requires hv_vcpu_set_reg to be called from the creating thread.
+    if (vcpu_index == 0) {
+        if (!machine_->SetupBootVCpu(vcpus_[0].get(), mem_.base)) {
+            LOG_ERROR("Failed to set initial vCPU registers");
+            RequestStop();
+            return;
+        }
+    }
 
     // Phase 2: AP threads wait for their startup signal (BSP runs immediately).
     // Hypervisors that manage AP startup internally (e.g. WHVP) skip the wait.
