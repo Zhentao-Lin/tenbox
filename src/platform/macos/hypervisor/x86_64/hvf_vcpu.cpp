@@ -1,5 +1,6 @@
 #include "platform/macos/hypervisor/x86_64/hvf_vcpu.h"
 #include "core/arch/x86_64/boot.h"
+#include "core/device/irq/local_apic.h"
 #include "core/vmm/types.h"
 
 #include <Hypervisor/hv.h>
@@ -225,6 +226,14 @@ bool HvfVCpu::SetupVmcs() {
     hv_vmx_vcpu_write_vmcs(vcpuid_, VMCS_GUEST_LINK_POINTER, ~0ull);
 
     return true;
+}
+
+void HvfVCpu::OnThreadInit() {
+    LocalApic::SetCurrentCpu(index_);
+}
+
+void HvfVCpu::OnStartup(const VCpuStartupState& state) {
+    SetupSipiRegisters(state.sipi_vector);
 }
 
 bool HvfVCpu::SetupBootRegisters(uint8_t* ram) {

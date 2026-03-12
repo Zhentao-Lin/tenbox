@@ -137,7 +137,8 @@ uint64_t LoadLinuxKernel(const BootConfig& config) {
     bp[BootOffset::kE820Entries] = e820_count;
 
     // Build ACPI tables (RSDP, XSDT, MADT, FADT, DSDT) and store RSDP GPA
-    GPA rsdp_addr = BuildAcpiTables(ram, config.cpu_count, config.virtio_devs);
+    GPA rsdp_addr = BuildAcpiTables(ram, config.cpu_count, config.virtio_devs,
+                                    config.apic_ids);
     *reinterpret_cast<uint64_t*>(bp + BootOffset::kAcpiRsdpAddr) = rsdp_addr;
 
     // Write 32-bit flat GDT at kGdtBase for the protected-mode kernel entry

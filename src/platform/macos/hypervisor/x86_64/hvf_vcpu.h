@@ -28,6 +28,9 @@ public:
     uint32_t Index() const override { return index_; }
     bool SetupBootRegisters(uint8_t* ram) override;
 
+    void OnThreadInit() override;
+    void OnStartup(const VCpuStartupState& state) override;
+
     void QueueInterrupt(uint32_t vector);
     void WakeFromHalt();
     bool HasPendingInterrupt();

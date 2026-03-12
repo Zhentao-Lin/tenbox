@@ -50,6 +50,11 @@ public:
     void SetIpiCallback(LocalApic::IpiFunc cb) { lapic_.SetIpiCallback(std::move(cb)); }
     void InitLapic(uint32_t cpu_count) { lapic_.Init(cpu_count); }
 
+    void SetApicIds(std::vector<uint32_t> ids) {
+        apic_ids_ = ids;
+        lapic_.SetApicIds(ids);
+    }
+
 private:
     Uart16550 uart_;
     I8254Pit pit_;
@@ -64,4 +69,5 @@ private:
     Device port_sink_;
 
     std::function<void(uint8_t)> irq_injector_;
+    std::vector<uint32_t> apic_ids_;
 };

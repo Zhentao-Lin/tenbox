@@ -99,6 +99,7 @@ bool X86Machine::LoadKernel(
     boot_cfg.mem = mem;
     boot_cfg.cpu_count = config.cpu_count;
     boot_cfg.virtio_devs = acpi_devs;
+    boot_cfg.apic_ids = apic_ids_;
 
     uint64_t kernel_size = x86::LoadLinuxKernel(boot_cfg);
     return kernel_size != 0;

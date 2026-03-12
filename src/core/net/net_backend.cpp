@@ -508,6 +508,35 @@ void NetBackend::ProcessPendingTx() {
                 frame.size() >= sizeof(EthHdr) + ip_hdr_len_gw + sizeof(TcpHdr)) {
                 auto* tcp = reinterpret_cast<TcpHdr*>(
                     frame.data() + sizeof(EthHdr) + ip_hdr_len_gw);
+
+                // Check if this TCP packet belongs to a port-forward
+                // connection (lwIP tcp_connect PCB). If so, feed it
+                // directly to lwIP instead of creating a NAT entry,
+                // which would rewrite the port and break the PCB match.
+                bool is_pf_packet = false;
+                uint16_t tcp_dport = ntohs(tcp->dst_port);
+                uint16_t tcp_sport = ntohs(tcp->src_port);
+                for (const auto& pf : port_forwards_) {
+                    if (tcp_sport != pf.guest_port) continue;
+                    for (const auto& c : pf.conns) {
+                        if (c.guest_pcb) {
+                            is_pf_packet = true;
+                            break;
+                        }
+                    }
+                    if (is_pf_packet) break;
+                }
+
+                if (is_pf_packet) {
+                    struct pbuf* p = pbuf_alloc(PBUF_RAW, static_cast<u16_t>(frame.size()), PBUF_RAM);
+                    if (p) {
+                        pbuf_take(p, frame.data(), static_cast<u16_t>(frame.size()));
+                        auto* nif = static_cast<struct netif*>(netif_);
+                        if (nif->input(p, nif) != ERR_OK) pbuf_free(p);
+                    }
+                    continue;
+                }
+
                 auto* entry = FindNatEntry(
                     ntohs(tcp->src_port), kHostLoopback, ntohs(tcp->dst_port), IPPROTO_TCP);
                 if (!entry) {

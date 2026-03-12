@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <vector>
 
 #ifdef __APPLE__
 #include <dispatch/dispatch.h>
@@ -27,6 +28,7 @@ public:
     ~LocalApic();
 
     void Init(uint32_t cpu_count);
+    void SetApicIds(const std::vector<uint32_t>& ids);
 
     void SetIrqInjectCallback(IrqInjectFunc cb) { inject_irq_ = std::move(cb); }
     void SetSipiCallback(SipiFunc cb) { sipi_callback_ = std::move(cb); }

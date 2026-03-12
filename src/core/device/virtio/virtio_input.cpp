@@ -176,7 +176,7 @@ void VirtioInputDevice::InjectEvent(uint16_t type, uint16_t code,
         // Without this, previously pushed entries sit un-notified and the
         // guest never recycles buffers -- permanent deadlock.
         if (notify) {
-            mmio_->NotifyUsedBuffer();
+            mmio_->NotifyUsedBuffer(0);
         }
         return;
     }
@@ -185,7 +185,7 @@ void VirtioInputDevice::InjectEvent(uint16_t type, uint16_t code,
     if (!vq->WalkChain(head, &chain)) {
         vq->PushUsed(head, 0);
         if (notify) {
-            mmio_->NotifyUsedBuffer();
+            mmio_->NotifyUsedBuffer(0);
         }
         return;
     }
@@ -202,6 +202,6 @@ void VirtioInputDevice::InjectEvent(uint16_t type, uint16_t code,
 
     vq->PushUsed(head, written);
     if (notify) {
-        mmio_->NotifyUsedBuffer();
+        mmio_->NotifyUsedBuffer(0);
     }
 }

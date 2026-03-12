@@ -16,6 +16,12 @@ void LocalApic::Init(uint32_t cpu_count) {
     }
 }
 
+void LocalApic::SetApicIds(const std::vector<uint32_t>& ids) {
+    for (uint32_t i = 0; i < ids.size() && i < kMaxCpus; i++) {
+        cpus_[i].id = ids[i];
+    }
+}
+
 void LocalApic::SetCurrentCpu(uint32_t cpu_index) {
     current_cpu_ = cpu_index;
 }

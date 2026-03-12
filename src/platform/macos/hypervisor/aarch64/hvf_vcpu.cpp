@@ -126,6 +126,10 @@ void HvfVCpu::CancelRun() {
     hv_vcpus_exit(&vcpu_, 1);
 }
 
+void HvfVCpu::OnStartup(const VCpuStartupState& state) {
+    SetupSecondaryCpu(state.entry_addr, state.context_id);
+}
+
 bool HvfVCpu::SetupBootRegisters(uint8_t* /*ram*/) {
     return true;
 }
