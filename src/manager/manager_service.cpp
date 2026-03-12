@@ -1323,7 +1323,17 @@ bool ManagerService::StartVmLoop(const std::string& vm_id, VmRecord& vm) {
         return false;
     }
 
-    vm.runtime.loop_thread = std::thread(&ManagerService::VmLoopThread, this, vm_id);
+    vm.runtime.loop_ready = false;
+    vm.runtime.loop_thread = std::thread(&ManagerService::VmLoopThread, this, vm_id, &vm.runtime);
+
+    // Wait until the event loop is actually spinning so that the named pipe
+    // is fully ready to accept connections before we launch the runtime.
+    // NOTE: this wait uses loop_ready_mutex (not vms_mutex_), so the loop
+    // thread can proceed without contending for vms_mutex_ before uv_run.
+    {
+        std::unique_lock<std::mutex> lk(vm.runtime.loop_ready_mutex);
+        vm.runtime.loop_ready_cv.wait(lk, [&] { return vm.runtime.loop_ready; });
+    }
     return true;
 }
 
@@ -1335,16 +1345,28 @@ void ManagerService::StopVmLoop(VmRecord& vm) {
     }
     vm.runtime.loop_initialized = false;
     vm.runtime.pipe_connected = false;
+    vm.runtime.loop_ready = false;
 }
 
-void ManagerService::VmLoopThread(const std::string& vm_id) {
-    VmRuntimeHandle* rt = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(vms_mutex_);
-        VmRecord* vm = FindVm(vm_id);
-        if (!vm) return;
-        rt = &vm->runtime;
-    }
+void ManagerService::VmLoopThread(const std::string& vm_id, VmRuntimeHandle* rt) {
+    // Use a one-shot uv_prepare handle to signal that the event loop is
+    // spinning and ready to accept pipe connections.  The prepare callback
+    // fires at the very beginning of the first loop iteration — after that
+    // we close it so it doesn't keep firing.
+    uv_prepare_t ready_signal;
+    ready_signal.data = rt;
+    uv_prepare_init(&rt->loop, &ready_signal);
+    uv_prepare_start(&ready_signal, [](uv_prepare_t* h) {
+        auto* handle = static_cast<VmRuntimeHandle*>(h->data);
+        {
+            std::lock_guard<std::mutex> lock(handle->loop_ready_mutex);
+            handle->loop_ready = true;
+        }
+        handle->loop_ready_cv.notify_one();
+        uv_prepare_stop(h);
+        uv_close(reinterpret_cast<uv_handle_t*>(h), nullptr);
+    });
+
     uv_run(&rt->loop, UV_RUN_DEFAULT);
 
     auto* ctx = static_cast<LoopContext*>(rt->server_pipe.data);

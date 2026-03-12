@@ -18,6 +18,7 @@
 #include <uv.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <deque>
 #include <functional>
 #include <map>
@@ -41,6 +42,13 @@ struct VmRuntimeHandle {
     std::thread loop_thread;
     bool loop_initialized = false;
     bool pipe_connected = false;
+
+    // Signalled by the loop thread once uv_run is about to start,
+    // so that StartVmLoop can block until the event loop is ready
+    // to accept connections (avoids race with fast runtime startup).
+    std::mutex loop_ready_mutex;
+    std::condition_variable loop_ready_cv;
+    bool loop_ready = false;
 
     // Send queue: filled by any thread, drained on loop thread
     std::mutex send_mutex;
@@ -209,7 +217,7 @@ private:
     // libuv per-VM event loop management
     bool StartVmLoop(const std::string& vm_id, VmRecord& vm);
     void StopVmLoop(VmRecord& vm);
-    void VmLoopThread(const std::string& vm_id);
+    void VmLoopThread(const std::string& vm_id, VmRuntimeHandle* rt);
 
     // libuv callbacks (static, pointer to ManagerService via handle->data)
     struct LoopContext {
