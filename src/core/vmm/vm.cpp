@@ -2,12 +2,14 @@
 #include "core/vmm/vm_platform.h"
 #include <algorithm>
 
-#if defined(_WIN32) || (defined(__APPLE__) && defined(__x86_64__))
+#if defined(__APPLE__) && defined(__x86_64__)
 #include "core/arch/x86_64/x86_machine.h"
 #include "platform/macos/hypervisor/x86_64/hvf_vcpu.h"
 #elif defined(__APPLE__) && defined(__aarch64__)
 #include "core/arch/aarch64/aarch64_machine.h"
 #include "platform/macos/hypervisor/aarch64/hvf_vcpu.h"
+#elif defined(_WIN32)
+#include "core/arch/x86_64/x86_machine.h"
 #endif
 
 static std::unique_ptr<MachineModel> CreateMachineModel() {
@@ -95,7 +97,7 @@ std::unique_ptr<Vm> Vm::Create(const VmConfig& config) {
         return nullptr;
     }
 
-#if defined(__APPLE__) && defined(__x86_64__)
+#if defined(_WIN32) || (defined(__APPLE__) && defined(__x86_64__))
     {
         auto* x86m = dynamic_cast<X86Machine*>(vm->machine_.get());
         if (x86m) {
@@ -448,7 +450,7 @@ bool Vm::SetupVirtioSnd(const VirtioDeviceSlot& slot) {
 }
 
 void Vm::VCpuThreadFunc(uint32_t vcpu_index) {
-#if defined(__APPLE__) && defined(__x86_64__)
+#if defined(_WIN32) || (defined(__APPLE__) && defined(__x86_64__))
     LocalApic::SetCurrentCpu(vcpu_index);
 #endif
 #ifdef __APPLE__
