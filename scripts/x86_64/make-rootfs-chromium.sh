@@ -707,6 +707,7 @@ do_unmount_image() {
 
 do_convert_qcow2() {
     echo "Converting to qcow2..."
+    mkdir -p "$(dirname "$OUTPUT")"
     qemu-img convert -f raw -O qcow2 -o cluster_size=65536,compression_type=zstd -c "$WORK_DIR/rootfs.raw" "$OUTPUT"
 }
 
