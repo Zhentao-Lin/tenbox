@@ -23,9 +23,10 @@ public:
 private:
     void Run();
 
-    std::thread thread_;
     std::mutex mutex_;
     std::condition_variable cv_;
     std::vector<Task> queue_;
     bool stop_ = false;
+    // Must be last: the thread starts immediately and uses the members above.
+    std::thread thread_;
 };

@@ -242,14 +242,17 @@ static void ShowPage(DialogData* data, Page page) {
         RefreshImageList(data);
         break;
 
-    case Page::kDownloading:
+    case Page::kDownloading: {
         SetControlsVisible(dlg, download_ctrls, 2, true);
         ShowWindow(btn_next, SW_HIDE);
         ShowWindow(btn_local, SW_HIDE);
         ShowWindow(btn_back, SW_HIDE);
         SendMessage(GetDlgItem(dlg, IDC_PROGRESS), PBM_SETPOS, 0, 0);
-        SetDlgItemTextW(dlg, IDC_PROGRESS_TEXT, i18n::tr_w(i18n::S::kImgDownloading).c_str());
+        std::wstring init_text = i18n::to_wide(data->selected_image.display_name)
+                                 + L"\n" + i18n::tr_w(i18n::S::kImgDownloading);
+        SetDlgItemTextW(dlg, IDC_PROGRESS_TEXT, init_text.c_str());
         break;
+    }
 
     case Page::kConfirm: {
         SetControlsVisible(dlg, confirm_ctrls, 9, true);
@@ -591,7 +594,7 @@ static LRESULT CALLBACK DlgSubclassProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp
         char buf[512];
         snprintf(buf, sizeof(buf), i18n::tr(i18n::S::kImgDownloadingFile),
                  data->current_file_index + 1, data->total_files, data->current_file_name.c_str());
-        std::string text = buf;
+        std::string text = data->selected_image.display_name + "\n" + buf;
         text += "\n" + std::to_string(file_progress) + "%";
         if (data->current_total > 0) {
             text += "  " + FormatSize(data->current_downloaded) + " / " + FormatSize(data->current_total);

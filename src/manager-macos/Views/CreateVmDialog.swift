@@ -167,7 +167,7 @@ private struct DownloadingPage: View {
         VStack(spacing: 16) {
             Spacer()
 
-            Text("Downloading Image")
+            Text("Downloading \(vm.selectedImage?.displayName ?? "Image")")
                 .font(.title2)
                 .fontWeight(.semibold)
 
