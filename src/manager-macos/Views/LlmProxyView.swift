@@ -55,7 +55,7 @@ struct LlmProxySheet: View {
                 }
             }
 
-            Text("VMs can access LLM APIs via http://10.0.2.3/ without an API key. Model aliases map to your configured LLM backends, keeping API credentials safe on the host.")
+            Text("VMs can access LLM APIs via http://10.0.2.3/ with any API key. Model aliases map to your configured LLM backends, keeping API credentials safe on the host.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal)

@@ -252,7 +252,7 @@ static const std::unordered_map<S, const char*> kStringsEn = {
     {S::kLlmConfirmRemoveTitle, "Remove Mapping"},
     {S::kLlmConfirmRemoveMsg, "Remove mapping for alias '%s'?"},
     {S::kLlmDuplicateAlias, "A mapping with alias '%s' already exists."},
-    {S::kLlmHint, "VMs can access LLM APIs via http://10.0.2.3/ without an API key. The real API credentials are securely managed here."},
+    {S::kLlmHint, "VMs can access LLM APIs via http://10.0.2.3/ with any API key. The real API credentials are securely managed here."},
 };
 
 // Simplified Chinese strings; each key explicitly bound (no order dependency)
@@ -495,7 +495,7 @@ static const std::unordered_map<S, const char*> kStringsZhCN = {
     {S::kLlmConfirmRemoveTitle, "删除映射"},
     {S::kLlmConfirmRemoveMsg, "确定删除别名为 '%s' 的映射？"},
     {S::kLlmDuplicateAlias, "别名 '%s' 已存在。"},
-    {S::kLlmHint, "虚拟机内可通过 http://10.0.2.3/ 无需 API Key 即可访问大模型接口，真实的 API 信息在此安全管理，也可在此切换模型映射。"},
+    {S::kLlmHint, "虚拟机内可通过 http://10.0.2.3/ 使用任意 API Key 即可访问大模型接口，真实的 API 信息在此安全管理，也可在此切换模型映射。"},
 };
 
 void InitLanguage() {
