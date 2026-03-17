@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var showForceStopConfirm = false
     @State private var showSharedFoldersSheet = false
     @State private var showPortForwardsSheet = false
+    @State private var showLlmProxySheet = false
 
     private var selectedVm: VmInfo? {
         guard let vmId = appState.selectedVmId else { return nil }
@@ -96,10 +97,19 @@ struct ContentView: View {
                         ToolbarBadgeLabel(
                             title: "Port Forwards",
                             systemImage: "network.badge.shield.half.filled",
-                            count: vm.portForwards.count
+                            count: vm.portForwards.count + vm.guestForwards.count
                         )
                     }
                     .help("Manage port forwards")
+
+                    Button(action: { showLlmProxySheet = true }) {
+                        ToolbarBadgeLabel(
+                            title: "LLM Proxy",
+                            systemImage: "brain",
+                            count: appState.llmMappings.count
+                        )
+                    }
+                    .help("Manage LLM proxy settings")
 
                     Divider()
 
@@ -131,6 +141,9 @@ struct ContentView: View {
             if let vm = selectedVm {
                 PortForwardsSheet(vmId: vm.id)
             }
+        }
+        .sheet(isPresented: $showLlmProxySheet) {
+            LlmProxySheet()
         }
         .alert("Delete VM", isPresented: $showDeleteConfirm) {
             Button("Cancel", role: .cancel) {}

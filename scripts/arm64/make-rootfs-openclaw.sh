@@ -529,6 +529,13 @@ openclaw config set gateway.auth.token tenbox
 openclaw config set gateway.controlUi.allowInsecureAuth true
 openclaw config set gateway.controlUi.dangerouslyDisableDeviceAuth true
 openclaw config set gateway.controlUi.allowedOrigins '["*"]'
+
+# TenBox LLM proxy provider (guestfwd: 10.0.2.3:80 -> host proxy)
+openclaw config set models.providers.tenbox.baseUrl "http://10.0.2.3/v1"
+openclaw config set models.providers.tenbox.apiKey "tenbox"
+openclaw config set models.providers.tenbox.api "openai-completions"
+openclaw config set models.providers.tenbox.models '[{"id":"default","name":"Default (TenBox Proxy)"}]'
+openclaw config set agents.defaults.model.primary "tenbox/default"
 SCRIPT
     sudo chmod +x "$MOUNT_DIR/tmp/openclaw_config.sh"
 

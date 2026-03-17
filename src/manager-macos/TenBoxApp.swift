@@ -121,6 +121,7 @@ class AppState: ObservableObject {
     @Published var showEditVmDialog = false
     @Published var showKeyboardCapturePermissionAlert = false
     @Published var startVmError: String?
+    @Published var llmMappings: [LlmModelMapping] = []
 
     private var bridge = TenBoxBridgeWrapper()
     let clipboardHandler = ClipboardHandler()
@@ -131,6 +132,7 @@ class AppState: ObservableObject {
 
     init() {
         refreshVmList()
+        loadLlmMappings()
         setupClipboard()
         stateObserver = NotificationCenter.default.addObserver(
             forName: NSNotification.Name("TenBoxVmStateChanged"),
@@ -330,6 +332,84 @@ class AppState: ObservableObject {
         sendPortForwardsUpdateIfRunning(vmId: vmId)
     }
 
+    func addGuestForward(_ gf: GuestForward, toVm vmId: String) {
+        _ = bridge.addGuestForward(gf, toVm: vmId)
+        refreshVmList()
+    }
+
+    func removeGuestForward(guestIp: String, guestPort: UInt16, fromVm vmId: String) {
+        _ = bridge.removeGuestForward(guestIp: guestIp, guestPort: guestPort, fromVm: vmId)
+        refreshVmList()
+    }
+
+    // MARK: - LLM Proxy settings
+
+    private var settingsPath: String {
+        let paths = NSSearchPathForDirectoriesInDomains(.applicationSupportDirectory, .userDomainMask, true)
+        let dir = (paths.first ?? NSHomeDirectory() + "/Library/Application Support") + "/TenBox"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        return dir + "/settings.json"
+    }
+
+    func loadLlmMappings() {
+        guard let data = FileManager.default.contents(atPath: settingsPath),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let llmProxy = json["llm_proxy"] as? [String: Any],
+              let mappingsArray = llmProxy["mappings"] as? [[String: Any]] else {
+            llmMappings = []
+            return
+        }
+        llmMappings = mappingsArray.compactMap { item in
+            guard let alias = item["alias"] as? String, !alias.isEmpty else { return nil }
+            return LlmModelMapping(
+                alias: alias,
+                targetUrl: item["target_url"] as? String ?? "",
+                apiKey: item["api_key"] as? String ?? "",
+                model: item["model"] as? String ?? "",
+                apiType: .openaiCompletions
+            )
+        }
+    }
+
+    private func saveLlmMappings() {
+        var json: [String: Any] = [:]
+        if let data = FileManager.default.contents(atPath: settingsPath),
+           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            json = existing
+        }
+        let mappingsArray: [[String: Any]] = llmMappings.map { m in
+            [
+                "alias": m.alias,
+                "target_url": m.targetUrl,
+                "api_key": m.apiKey,
+                "model": m.model,
+                "api_type": "openai_completions",
+            ]
+        }
+        json["llm_proxy"] = ["mappings": mappingsArray]
+        if let data = try? JSONSerialization.data(withJSONObject: json, options: .prettyPrinted) {
+            try? data.write(to: URL(fileURLWithPath: settingsPath))
+        }
+    }
+
+    func addLlmMapping(_ mapping: LlmModelMapping) {
+        guard !llmMappings.contains(where: { $0.alias == mapping.alias }) else { return }
+        llmMappings.append(mapping)
+        saveLlmMappings()
+    }
+
+    func removeLlmMapping(alias: String) {
+        llmMappings.removeAll { $0.alias == alias }
+        saveLlmMappings()
+    }
+
+    func updateLlmMapping(originalAlias: String, mapping: LlmModelMapping) {
+        if let idx = llmMappings.firstIndex(where: { $0.alias == originalAlias }) {
+            llmMappings[idx] = mapping
+        }
+        saveLlmMappings()
+    }
+
     private func sendSharedFoldersUpdateIfRunning(vmId: String) {
         guard let session = activeSessions[vmId], session.ipcClient.isConnected,
               let vm = vms.first(where: { $0.id == vmId }) else { return }
@@ -343,7 +423,7 @@ class AppState: ObservableObject {
         guard let session = activeSessions[vmId], session.ipcClient.isConnected,
               let vm = vms.first(where: { $0.id == vmId }) else { return }
         let entries = vm.portForwards.map { pf in
-            "tcp:\(pf.lan ? "0.0.0.0" : "127.0.0.1"):\(pf.hostPort)-:\(pf.guestPort)"
+            "tcp:\(pf.effectiveHostIp):\(pf.hostPort)-\(pf.effectiveGuestIp):\(pf.guestPort)"
         }
         session.ipcClient.sendPortForwardsUpdate(entries: entries, netEnabled: vm.netEnabled)
     }
