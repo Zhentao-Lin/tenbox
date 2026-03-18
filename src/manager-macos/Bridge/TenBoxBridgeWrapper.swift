@@ -12,11 +12,11 @@ class TenBoxBridgeWrapper {
             }
             let pfs = info.portForwards.map { pf in
                 PortForward(hostPort: pf.hostPort, guestPort: pf.guestPort,
-                            hostIp: pf.hostIp ?? "127.0.0.1", guestIp: pf.guestIp ?? "")
+                            hostIp: pf.hostIp, guestIp: pf.guestIp)
             }
             let gfs = info.guestForwards.map { gf in
-                GuestForward(guestIp: gf.guestIp ?? "", guestPort: gf.guestPort,
-                             hostAddr: gf.hostAddr ?? "127.0.0.1", hostPort: gf.hostPort)
+                GuestForward(guestIp: gf.guestIp, guestPort: gf.guestPort,
+                             hostAddr: gf.hostAddr, hostPort: gf.hostPort)
             }
             return VmInfo(
                 id: info.vmId,
