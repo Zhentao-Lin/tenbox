@@ -122,6 +122,12 @@ If you are building guest images yourself, use the `x86_64` image scripts for Wi
 
 To create a VM through the GUI, click **New VM** and point to the kernel, initramfs, and disk image files built above.
 
+## User guide
+
+Usage documentation (Chinese): **[养虾教程](https://my.feishu.cn/wiki/Q96KwUH1Di3cAik2W7kcQsWKncb)** (Feishu Wiki).
+
+Guest images built with the Chromium, Copaw, and OpenClaw rootfs scripts also install a desktop shortcut **`Help.desktop`** that opens the same page (source: [`scripts/rootfs-configs/Help.desktop`](scripts/rootfs-configs/Help.desktop)).
+
 ## Architecture
 
 TenBox uses a two-process design. The manager process owns the UI and spawns a separate runtime process for each VM. They communicate over a platform-specific IPC transport: Windows Named Pipes on Windows and Unix domain sockets on macOS.
@@ -202,6 +208,7 @@ scripts/
 ├── docker/              # Dockerfile & build.sh wrapper
 ├── rootfs-scripts/      # In-chroot setup scripts (shared)
 ├── rootfs-services/     # systemd service units (shared)
+├── rootfs-configs/      # Shared guest files (e.g. Help.desktop wiki shortcut)
 ├── requirements.txt     # Python dependencies for release tooling
 ├── image_manager.py     # Image source management helper
 ├── build-macos.sh       # Build macOS app bundle and update ZIP

@@ -56,8 +56,28 @@ mkdir -p kmod_extract
 dpkg-deb -x kernel.deb kmod_extract/
 
 echo "[3/5] Creating initramfs layout & extracting modules ..."
-mkdir -p "$WORKDIR/initramfs"/{bin,dev,proc,sys,etc,tmp,lib/modules}
+mkdir -p "$WORKDIR/initramfs"/{bin,sbin,dev,proc,sys,etc,tmp,lib/modules}
 cp "$WORKDIR/busybox" "$WORKDIR/initramfs/bin/"
+
+# Install e2fsck (fsck.ext4) from the host system (already in Docker image)
+E2FSCK_BIN="$(command -v e2fsck || echo /sbin/e2fsck)"
+if [ -x "$E2FSCK_BIN" ]; then
+    cp "$E2FSCK_BIN" "$WORKDIR/initramfs/sbin/e2fsck"
+    chmod +x "$WORKDIR/initramfs/sbin/e2fsck"
+    ln -sf e2fsck "$WORKDIR/initramfs/sbin/fsck.ext4"
+    mkdir -p "$WORKDIR/initramfs/lib/x86_64-linux-gnu" "$WORKDIR/initramfs/lib64"
+    for lib in $(ldd "$E2FSCK_BIN" 2>/dev/null | grep -oP '/\S+'); do
+        if [ -f "$lib" ]; then
+            destdir="$WORKDIR/initramfs$(dirname "$lib")"
+            mkdir -p "$destdir"
+            cp "$lib" "$destdir/"
+            echo "  lib: $lib"
+        fi
+    done
+    echo "  Installed: e2fsck (fsck.ext4)"
+else
+    echo "  WARNING: e2fsck not found on host; install e2fsprogs in Docker image"
+fi
 
 MODDIR="kmod_extract/lib/modules/$KVER/kernel"
 DESTDIR="$WORKDIR/initramfs/lib/modules"

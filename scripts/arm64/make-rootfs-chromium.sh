@@ -98,6 +98,7 @@ STEPS=(
     "install_ibus"
     "install_usertools"
     "install_ntp"
+    "copy_readme"
     "config_locale"
     "config_services"
     "config_virtio_gpu"
@@ -126,6 +127,7 @@ STEP_DESCRIPTIONS=(
     "Install IBus Chinese input method"
     "Install user tools (Chromium, etc.)"
     "Install NTP time sync"
+    "Copy wiki desktop link (Help.desktop)"
     "Configure locale"
     "Configure systemd services"
     "Configure virtio-gpu resize"
@@ -284,6 +286,19 @@ PRC
     if ! mountpoint -q "$MOUNT_DIR/var/cache/apt/archives" 2>/dev/null; then
         sudo mount --bind "$APT_CACHE_DIR" "$MOUNT_DIR/var/cache/apt/archives"
     fi
+    # Remove stale apt locks left over from interrupted builds
+    sudo rm -f "$MOUNT_DIR/var/cache/apt/archives/lock"
+    sudo rm -f "$MOUNT_DIR/var/lib/apt/lists/lock"
+    sudo rm -f "$MOUNT_DIR/var/lib/dpkg/lock"
+    sudo rm -f "$MOUNT_DIR/var/lib/dpkg/lock-frontend"
+    # Purge corrupt/truncated .deb files from shared apt cache
+    for deb in "$APT_CACHE_DIR"/*.deb; do
+        [ -f "$deb" ] || continue
+        if ! dpkg-deb --info "$deb" >/dev/null 2>&1; then
+            echo "  Removing corrupt cached package: $(basename "$deb")"
+            rm -f "$deb"
+        fi
+    done
 
     sudo cp -r "$SCRIPT_DIR/../rootfs-scripts" "$MOUNT_DIR/tmp/"
     sudo cp -r "$SCRIPT_DIR/../rootfs-services" "$MOUNT_DIR/tmp/"
@@ -448,6 +463,22 @@ NTP
 
 systemctl enable systemd-timesyncd.service 2>/dev/null || true
 timedatectl set-ntp true 2>/dev/null || true
+EOF
+}
+
+do_copy_readme() {
+    sudo chroot "$MOUNT_DIR" /bin/bash -e << EOF
+DESKTOP_DIR="/home/$USER_NAME/Desktop"
+if [ -f "\$DESKTOP_DIR/Help.desktop" ]; then
+    echo "  Desktop wiki link already copied"
+    exit 0
+fi
+
+mkdir -p "\$DESKTOP_DIR"
+chown $USER_NAME:$USER_NAME "\$DESKTOP_DIR"
+cp /tmp/rootfs-configs/Help.desktop "\$DESKTOP_DIR/Help.desktop"
+chown $USER_NAME:$USER_NAME "\$DESKTOP_DIR/Help.desktop"
+chmod +x "\$DESKTOP_DIR/Help.desktop"
 EOF
 }
 
@@ -655,6 +686,7 @@ run_step "install_audio"  "Installing audio"             do_install_audio
 run_step "install_ibus"   "Installing IBus"              do_install_ibus
 run_step "install_usertools" "Installing user tools"     do_install_usertools
 run_step "install_ntp"    "Installing NTP time sync"     do_install_ntp
+run_step "copy_readme"    "Copying wiki desktop link"    do_copy_readme
 run_step "config_locale"  "Configuring locale"           do_config_locale
 run_step "config_services" "Configuring services"        do_config_services
 run_step "config_virtio_gpu" "Configuring virtio-gpu"    do_config_virtio_gpu

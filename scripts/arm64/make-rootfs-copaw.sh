@@ -111,6 +111,7 @@ STEPS=(
     "install_ntp"
     "install_copaw"
     "config_copaw"
+    "copy_readme"
     "config_locale"
     "config_services"
     "config_virtio_gpu"
@@ -141,7 +142,8 @@ STEP_DESCRIPTIONS=(
     "Install Node.js 22"
     "Install NTP time sync"
     "Install Copaw"
-    "Configure Copaw autostart"
+    "Configure Copaw systemd service"
+    "Copy desktop links (Help + CoPaw)"
     "Configure locale"
     "Configure systemd services"
     "Configure virtio-gpu resize"
@@ -300,6 +302,19 @@ PRC
     if ! mountpoint -q "$MOUNT_DIR/var/cache/apt/archives" 2>/dev/null; then
         sudo mount --bind "$APT_CACHE_DIR" "$MOUNT_DIR/var/cache/apt/archives"
     fi
+    # Remove stale apt locks left over from interrupted builds
+    sudo rm -f "$MOUNT_DIR/var/cache/apt/archives/lock"
+    sudo rm -f "$MOUNT_DIR/var/lib/apt/lists/lock"
+    sudo rm -f "$MOUNT_DIR/var/lib/dpkg/lock"
+    sudo rm -f "$MOUNT_DIR/var/lib/dpkg/lock-frontend"
+    # Purge corrupt/truncated .deb files from shared apt cache
+    for deb in "$APT_CACHE_DIR"/*.deb; do
+        [ -f "$deb" ] || continue
+        if ! dpkg-deb --info "$deb" >/dev/null 2>&1; then
+            echo "  Removing corrupt cached package: $(basename "$deb")"
+            rm -f "$deb"
+        fi
+    done
 
     sudo cp -r "$SCRIPT_DIR/../rootfs-scripts" "$MOUNT_DIR/tmp/"
     sudo cp -r "$SCRIPT_DIR/../rootfs-services" "$MOUNT_DIR/tmp/"
@@ -457,18 +472,20 @@ do_install_nodejs() {
     sudo cp "$CACHE_NODESOURCE" "$MOUNT_DIR/tmp/nodesource_setup.sh"
 
     sudo chroot "$MOUNT_DIR" /bin/bash -e << EOF
-if command -v node &>/dev/null && node --version | grep -q "v22"; then
+if ! command -v node &>/dev/null || ! node --version | grep -q "v22"; then
+    echo "Installing Node.js 22..."
+    bash /tmp/nodesource_setup.sh
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+    rm -f /tmp/nodesource_setup.sh
+else
     echo "  Node.js 22 already installed"
-    exit 0
 fi
-echo "Installing Node.js 22..."
-bash /tmp/nodesource_setup.sh
-DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
-rm -f /tmp/nodesource_setup.sh
 
-npm config set registry https://registry.npmmirror.com --global
-echo "registry=https://registry.npmmirror.com" >> /etc/npmrc
-su - $USER_NAME -c "npm config set registry https://registry.npmmirror.com"
+# Global npm registry: Alibaba npmmirror (runs on fresh install and resume)
+if command -v npm &>/dev/null; then
+    npm config set registry https://registry.npmmirror.com --global
+    su - $USER_NAME -s /bin/bash -c "npm config set registry https://registry.npmmirror.com"
+fi
 EOF
 }
 
@@ -505,6 +522,24 @@ su - $USER_NAME -c 'curl -fsSL https://copaw.agentscope.io/install.sh | bash'
 echo "Initializing Copaw..."
 su - $USER_NAME -c '~/.copaw/bin/copaw init --defaults --accept-security'
 
+echo "Disabling Copaw security (Tool Guard)..."
+su - $USER_NAME -c 'python3 -c "
+import json, os
+cfg_path = os.path.expanduser(\"~/.copaw/config.json\")
+with open(cfg_path) as f:
+    cfg = json.load(f)
+cfg.setdefault(\"security\", {}).setdefault(\"tool_guard\", {})[\"enabled\"] = False
+with open(cfg_path, \"w\") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+print(\"  Tool Guard disabled in\", cfg_path)
+"'
+
+echo "Configuring TenBox LLM provider..."
+mkdir -p /home/$USER_NAME/.copaw.secret/providers/custom
+cp /tmp/rootfs-configs/copaw-provider-tenbox.json /home/$USER_NAME/.copaw.secret/providers/custom/tenbox.json
+cp /tmp/rootfs-configs/copaw-active-model.json /home/$USER_NAME/.copaw.secret/providers/active_model.json
+chown -R $USER_NAME:$USER_NAME /home/$USER_NAME/.copaw.secret
+
 EOF
 
     COPAW_VERSION=$(sudo chroot "$MOUNT_DIR" su - "$USER_NAME" -c \
@@ -518,24 +553,42 @@ EOF
 
 do_config_copaw() {
     sudo chroot "$MOUNT_DIR" /bin/bash -e << EOF
-if [ -f /home/$USER_NAME/.config/autostart/copaw.desktop ]; then
+if [ -f /home/$USER_NAME/.config/systemd/user/copaw.service ]; then
     echo "  Copaw already configured"
     exit 0
 fi
 
-echo "Setting up Copaw autostart..."
-mkdir -p /home/$USER_NAME/.config/autostart
-cat > /home/$USER_NAME/.config/autostart/copaw.desktop << 'DESKTOP'
-[Desktop Entry]
-Type=Application
-Exec=xfce4-terminal -e "bash -ic 'echo Starting CoPaw...; copaw app --host 0.0.0.0; exec bash'"
-Hidden=false
-NoDisplay=false
-X-GNOME-Autostart-enabled=true
-Name=Copaw AutoRun
-Comment=Start copaw app in terminal on login
-DESKTOP
+echo "Setting up Copaw systemd user service..."
+mkdir -p /home/$USER_NAME/.config/systemd/user
+cp /tmp/rootfs-services/copaw.service /home/$USER_NAME/.config/systemd/user/
 chown -R $USER_NAME:$USER_NAME /home/$USER_NAME/.config
+
+# Enable lingering so user services start at boot (before login)
+loginctl enable-linger $USER_NAME 2>/dev/null || mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/$USER_NAME
+
+# Enable the service
+su - $USER_NAME -c 'XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user enable copaw.service' 2>/dev/null || true
+EOF
+}
+
+do_copy_readme() {
+    sudo chroot "$MOUNT_DIR" /bin/bash -e << EOF
+DESKTOP_DIR="/home/$USER_NAME/Desktop"
+if [ -f "\$DESKTOP_DIR/Help.desktop" ] && [ -f "\$DESKTOP_DIR/CoPaw.desktop" ]; then
+    echo "  Desktop links already copied"
+    exit 0
+fi
+
+mkdir -p "\$DESKTOP_DIR"
+chown $USER_NAME:$USER_NAME "\$DESKTOP_DIR"
+
+cp /tmp/rootfs-configs/Help.desktop "\$DESKTOP_DIR/Help.desktop"
+chown $USER_NAME:$USER_NAME "\$DESKTOP_DIR/Help.desktop"
+chmod +x "\$DESKTOP_DIR/Help.desktop"
+
+cp /tmp/rootfs-configs/CoPaw.desktop "\$DESKTOP_DIR/CoPaw.desktop"
+chown $USER_NAME:$USER_NAME "\$DESKTOP_DIR/CoPaw.desktop"
+chmod +x "\$DESKTOP_DIR/CoPaw.desktop"
 EOF
 }
 
@@ -762,6 +815,7 @@ run_step "install_nodejs" "Installing Node.js"           do_install_nodejs
 run_step "install_ntp"    "Installing NTP time sync"     do_install_ntp
 run_step "install_copaw"  "Installing Copaw"             do_install_copaw
 run_step "config_copaw"   "Configuring Copaw"            do_config_copaw
+run_step "copy_readme"    "Copying wiki desktop link"    do_copy_readme
 run_step "config_locale"  "Configuring locale"           do_config_locale
 run_step "config_services" "Configuring services"        do_config_services
 run_step "config_virtio_gpu" "Configuring virtio-gpu"    do_config_virtio_gpu
