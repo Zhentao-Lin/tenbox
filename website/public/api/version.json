@@ -1,18 +1,18 @@
 {
-  "latest_version": "0.5.6",
+  "latest_version": "0.5.7",
   "min_supported_version": "0.1.0",
-  "release_notes": "从睡眠中唤醒时自动同步时间",
-  "release_date": "2026-03-20",
-  "download_url": "https://files.xiaozhi.me/tenbox/releases/TenBox_0.5.6.msi",
-  "sha256": "7d52c591ac1d18e838fef1b636d6b45271b00f09b275bd230055ae1495fb8f2e",
+  "release_notes": "- 修复磁盘损坏问题\n- 请在升级前确保已备份虚拟机内的重要数据",
+  "release_date": "2026-03-21",
+  "download_url": "https://files.xiaozhi.me/tenbox/releases/TenBox_0.5.7.msi",
+  "sha256": "ce1d205409bc7e6ec1c907b2e078bb5d5b7888ca96efc720546efd14132a89f2",
   "platforms": {
     "windows": {
-      "latest_version": "0.5.6",
-      "release_notes": "从睡眠中唤醒时自动同步时间",
-      "release_date": "2026-03-20",
-      "download_url": "https://files.xiaozhi.me/tenbox/releases/TenBox_0.5.6.msi",
-      "sha256": "7d52c591ac1d18e838fef1b636d6b45271b00f09b275bd230055ae1495fb8f2e",
-      "size": 3227648,
+      "latest_version": "0.5.7",
+      "release_notes": "- 修复磁盘损坏问题\n- 请在升级前确保已备份虚拟机内的重要数据",
+      "release_date": "2026-03-21",
+      "download_url": "https://files.xiaozhi.me/tenbox/releases/TenBox_0.5.7.msi",
+      "sha256": "ce1d205409bc7e6ec1c907b2e078bb5d5b7888ca96efc720546efd14132a89f2",
+      "size": 3231744,
       "min_os": "Windows 10"
     },
     "macos": {

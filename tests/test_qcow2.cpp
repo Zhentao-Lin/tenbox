@@ -23,10 +23,21 @@
 #define _ftelli64 ftello
 #endif
 
-// ── byte-swap helpers ────────────────────────────────────────────────
-static uint16_t be16(uint16_t v) { return __builtin_bswap16(v); }
-static uint32_t be32(uint32_t v) { return __builtin_bswap32(v); }
-static uint64_t be64(uint64_t v) { return __builtin_bswap64(v); }
+// ── byte-swap helpers (portable; MSVC has no __builtin_bswap*) ────────
+static uint16_t be16(uint16_t v) {
+    return static_cast<uint16_t>((v << 8) | (v >> 8));
+}
+static uint32_t be32(uint32_t v) {
+    v = ((v & 0x0000FFFFu) << 16) | ((v & 0xFFFF0000u) >> 16);
+    v = ((v & 0x00FF00FFu) << 8) | ((v & 0xFF00FF00u) >> 8);
+    return v;
+}
+static uint64_t be64(uint64_t v) {
+    v = ((v & 0x00000000FFFFFFFFull) << 32) | ((v & 0xFFFFFFFF00000000ull) >> 32);
+    v = ((v & 0x0000FFFF0000FFFFull) << 16) | ((v & 0xFFFF0000FFFF0000ull) >> 16);
+    v = ((v & 0x00FF00FF00FF00FFull) << 8) | ((v & 0xFF00FF00FF00FF00ull) >> 8);
+    return v;
+}
 
 // ── test infrastructure ──────────────────────────────────────────────
 static int g_pass = 0, g_fail = 0;
@@ -61,13 +72,21 @@ static bool QemuImg(const std::string& args) {
 // Prints the check output regardless.
 static bool QemuImgCheck(const std::string& path) {
     std::string cmd = std::string(kDockerPrefix) + "check " + path + " 2>&1";
+#ifdef _WIN32
+    FILE* p = _popen(cmd.c_str(), "r");
+#else
     FILE* p = popen(cmd.c_str(), "r");
+#endif
     if (!p) return false;
     std::string output;
     char buf[512];
     while (fgets(buf, sizeof(buf), p))
         output += buf;
+#ifdef _WIN32
+    int ret = _pclose(p);
+#else
     int ret = pclose(p);
+#endif
     bool ok = (ret == 0) && (output.find("No errors") != std::string::npos);
     fprintf(stdout, "  qemu-img check: %s", output.c_str());
     if (!ok)
