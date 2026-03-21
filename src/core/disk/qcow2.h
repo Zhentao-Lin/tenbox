@@ -43,12 +43,19 @@ public:
     bool Discard(uint64_t offset, uint64_t len) override;
     bool WriteZeros(uint64_t offset, uint64_t len) override;
 
+    // Scan image integrity and optionally repair leaked clusters.
+    // When fix=true, corrects refcounts for leaked clusters in-place.
+    // Returns the number of leaked clusters found (or fixed), or -1 on error.
+    int RepairLeaks(bool fix);
+
 private:
     static constexpr uint32_t kQcow2Magic   = 0x514649FB;
     static constexpr uint64_t kCompressedBit = 1ULL << 62;
     static constexpr uint64_t kCopiedBit     = 1ULL << 63;
     // Mask to extract the host offset from L1/L2 entries (bits 9..55)
     static constexpr uint64_t kOffsetMask    = 0x00FFFFFFFFFFFE00ULL;
+    // Bit 0 of standard cluster descriptor: cluster reads as all zeros (v3)
+    static constexpr uint64_t kZeroFlag      = 1ULL;
     static constexpr size_t   kL2CacheMax    = 64;
     static constexpr size_t   kRfbCacheMax   = 64;
 
@@ -81,6 +88,8 @@ private:
     uint64_t AllocateCluster();
     // Decrement refcount of the cluster at the given host offset.
     void FreeCluster(uint64_t host_offset);
+    // Decrement refcounts for all physical clusters spanned by a compressed L2 entry.
+    void FreeCompressedCluster(uint64_t l2_entry);
 
     // Ensure L2 table is allocated for the given L1 index.
     uint64_t* EnsureL2Table(uint32_t l1_idx);
@@ -104,6 +113,8 @@ private:
     std::vector<uint64_t> l1_table_;  // in host byte order
     uint64_t file_end_ = 0;          // current end of file (for append allocations)
     uint8_t compression_type_ = 0;   // 0=zlib (deflate), 1=zstd
+    uint32_t refcount_order_ = 4;    // log2(refcount_bits), default 4 => 16-bit
+    uint32_t refcount_bits_ = 16;
 
     // Refcount management
     std::vector<uint64_t> refcount_table_;  // host byte order

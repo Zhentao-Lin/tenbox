@@ -92,6 +92,9 @@ bool Qcow2DiskImage::Open(const std::string& path) {
              refcount_table_offset_, refcount_table_clusters_,
              file_end_,
              compression_type_ == 1 ? "zstd" : "zlib");
+    
+    RepairLeaks(true);
+
     return true;
 }
 
@@ -140,7 +143,23 @@ bool Qcow2DiskImage::ReadHeader() {
 
     refcount_table_offset_ = Be64(hdr.refcount_table_offset);
     refcount_table_clusters_ = Be32(hdr.refcount_table_clusters);
-    rfb_entries_ = cluster_size_ * 8 / 16;  // 16-bit refcounts
+
+    // Read refcount_order: v2 always uses order=4 (16-bit), v3 reads from header
+    refcount_order_ = 4;
+    if (version_ == 3) {
+        refcount_order_ = Be32(hdr.refcount_order);
+        if (refcount_order_ > 6) {
+            LOG_ERROR("Qcow2: invalid refcount_order %u (max 6)", refcount_order_);
+            return false;
+        }
+    }
+    refcount_bits_ = 1u << refcount_order_;
+    if (refcount_bits_ != 16) {
+        LOG_ERROR("Qcow2: unsupported refcount_bits %u (only 16-bit supported)",
+                  refcount_bits_);
+        return false;
+    }
+    rfb_entries_ = cluster_size_ * 8 / refcount_bits_;
 
     // Read compression_type for qcow2 v3 (offset 104, requires header_length >= 108)
     compression_type_ = 0;  // default: zlib (DEFLATE)
@@ -483,8 +502,14 @@ uint64_t Qcow2DiskImage::ResolveOffset(uint64_t virt_offset, bool* compressed,
         uint64_t host_off = l2_entry & offset_mask;
 
         *comp_host_off = host_off;
-        *comp_size = nb_csectors * 512;
+        *comp_size = nb_csectors * 512 - (host_off & 511);
         return 0;  // caller must use compressed path
+    }
+
+    // v3 zero flag: bit 0 means cluster reads as all zeros even if a host
+    // offset is present (used for preallocation).
+    if (version_ >= 3 && (l2_entry & kZeroFlag)) {
+        return 0;
     }
 
     return l2_entry & kOffsetMask;
@@ -658,6 +683,26 @@ void Qcow2DiskImage::FreeCluster(uint64_t host_offset) {
     }
 }
 
+void Qcow2DiskImage::FreeCompressedCluster(uint64_t l2_entry) {
+    uint32_t csize_shift = 62 - (cluster_bits_ - 8);
+    uint64_t csize_mask = (1ULL << (cluster_bits_ - 8)) - 1;
+    uint64_t off_mask = (1ULL << csize_shift) - 1;
+
+    uint32_t nb_csectors =
+        static_cast<uint32_t>(((l2_entry >> csize_shift) & csize_mask) + 1);
+    uint64_t host_off = l2_entry & off_mask;
+    // Match QEMU's qcow2_parse_compressed_l2_entry: subtract the
+    // byte offset within the first 512-byte sector.
+    uint64_t comp_len = static_cast<uint64_t>(nb_csectors) * 512
+                        - (host_off & 511);
+
+    uint64_t c_start = host_off >> cluster_bits_;
+    uint64_t c_end = (host_off + comp_len - 1) >> cluster_bits_;
+    for (uint64_t c = c_start; c <= c_end; c++) {
+        FreeCluster(c << cluster_bits_);
+    }
+}
+
 uint64_t* Qcow2DiskImage::EnsureL2Table(uint32_t l1_idx) {
     if (l1_idx >= l1_size_) return nullptr;
 
@@ -671,6 +716,17 @@ uint64_t* Qcow2DiskImage::EnsureL2Table(uint32_t l1_idx) {
     uint64_t new_l2_off = AllocateCluster();
     if (new_l2_off == 0) {
         LOG_ERROR("Qcow2: failed to allocate L2 table for l1_idx %u", l1_idx);
+        return nullptr;
+    }
+
+    // Zero out the cluster so stale data isn't interpreted as L2 entries.
+    // AllocateCluster only zeroes when extending the file; reused clusters
+    // (freed by FreeCompressedCluster / RepairLeaks) may contain old data.
+    std::vector<uint8_t> zeros(cluster_size_, 0);
+    _fseeki64(file_, new_l2_off, SEEK_SET);
+    if (fwrite(zeros.data(), 1, cluster_size_, file_) != cluster_size_) {
+        LOG_ERROR("Qcow2: failed to zero L2 table at 0x%llX",
+                  (unsigned long long)new_l2_off);
         return nullptr;
     }
 
@@ -753,9 +809,10 @@ bool Qcow2DiskImage::Write(uint64_t offset, const void* buf, uint32_t len) {
         uint64_t data_off = 0;
 
         // Per QCOW2 spec: bit 63 (COPIED) = 1 means refcount == 1, safe to
-        // write in-place.  Anything else (unallocated, compressed, or shared
-        // with refcount > 1) requires COW into a new cluster.
-        bool need_cow = !(l2_entry & kCopiedBit) || (l2_entry & kCompressedBit);
+        // write in-place.  Anything else (unallocated, compressed, shared
+        // with refcount > 1, or zero-flagged) requires COW into a new cluster.
+        bool need_cow = !(l2_entry & kCopiedBit) || (l2_entry & kCompressedBit) ||
+                        (version_ >= 3 && (l2_entry & kZeroFlag));
 
         if (need_cow) {
             data_off = AllocateCluster();
@@ -783,11 +840,16 @@ bool Qcow2DiskImage::Write(uint64_t offset, const void* buf, uint32_t len) {
                 WriteCluster(data_off, 0, old_data.data(), cluster_size_);
             }
 
-            // Free old cluster if it was a standard allocated entry
-            if (l2_entry != 0 && !(l2_entry & kCompressedBit)) {
-                uint64_t old_off = l2_entry & kOffsetMask;
-                if (old_off != 0) {
-                    FreeCluster(old_off);
+            // Free old cluster(s) after COW read is done but before L2 update.
+            // Matches QEMU handle_alloc: free old entries with DISCARD_NEVER.
+            if (l2_entry != 0) {
+                if (l2_entry & kCompressedBit) {
+                    FreeCompressedCluster(l2_entry);
+                } else {
+                    uint64_t old_off = l2_entry & kOffsetMask;
+                    if (old_off != 0) {
+                        FreeCluster(old_off);
+                    }
                 }
             }
 
@@ -833,7 +895,9 @@ bool Qcow2DiskImage::Discard(uint64_t offset, uint64_t len) {
                     uint64_t* l2 = GetL2Table(l2_table_off);
                     if (l2 && l2[l2_idx] != 0) {
                         uint64_t l2_entry = l2[l2_idx];
-                        if (!(l2_entry & kCompressedBit)) {
+                        if (l2_entry & kCompressedBit) {
+                            FreeCompressedCluster(l2_entry);
+                        } else {
                             uint64_t host_off = l2_entry & kOffsetMask;
                             if (host_off != 0) {
                                 FreeCluster(host_off);

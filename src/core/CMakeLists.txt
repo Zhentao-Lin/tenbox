@@ -9,6 +9,7 @@ set(TENBOX_CORE_SOURCES
     ${CMAKE_SOURCE_DIR}/src/core/disk/disk_worker.cpp
     ${CMAKE_SOURCE_DIR}/src/core/disk/raw_image.cpp
     ${CMAKE_SOURCE_DIR}/src/core/disk/qcow2.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/disk/qcow2_check.cpp
     ${CMAKE_SOURCE_DIR}/src/core/device/virtio/virtio_net.cpp
     ${CMAKE_SOURCE_DIR}/src/core/device/virtio/virtio_input.cpp
     ${CMAKE_SOURCE_DIR}/src/core/device/virtio/virtio_gpu.cpp
