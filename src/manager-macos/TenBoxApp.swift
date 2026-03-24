@@ -93,7 +93,7 @@ struct TenBoxApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appDelegate.appState)
-                .frame(minWidth: 1020, minHeight: 600)
+                .frame(minWidth: 800, idealWidth: 1020, minHeight: 480, idealHeight: 600)
         }
         .commands {
             CommandGroup(replacing: .appInfo) {
@@ -147,6 +147,10 @@ class AppState: ObservableObject {
 
     init() {
         refreshVmList()
+        NSLog("[TenBoxApp] Loaded %d VM(s):", vms.count)
+        for vm in vms {
+            NSLog("[TenBoxApp]   - [%@] \"%@\"", vm.id, vm.name)
+        }
         loadLlmMappings()
         startLlmProxyIfNeeded()
         setupClipboard()
