@@ -41,8 +41,13 @@ if [ -z "$BB_DEB_PATH" ]; then
 fi
 curl -fsSL -o busybox-static.deb "$MIRROR/$BB_DEB_PATH"
 dpkg-deb -x busybox-static.deb bb_extract/
-BB_BIN=$(find bb_extract/ -name busybox -type f | head -1)
-if [ -z "$BB_BIN" ]; then echo "Error: busybox binary not found in deb" >&2; exit 1; fi
+BB_BIN=$(find bb_extract/ -path '*/bin/busybox' -type f | head -1)
+if [ -z "$BB_BIN" ]; then
+    BB_BIN=$(find bb_extract/ -name busybox -type f -exec file {} \; | grep -m1 'ELF' | cut -d: -f1)
+fi
+if [ -z "$BB_BIN" ] || ! file "$BB_BIN" | grep -q 'ELF'; then
+    echo "Error: busybox ELF binary not found in deb" >&2; exit 1
+fi
 cp "$BB_BIN" "$WORKDIR/busybox"
 chmod +x "$WORKDIR/busybox"
 
