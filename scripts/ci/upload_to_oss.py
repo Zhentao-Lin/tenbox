@@ -18,6 +18,12 @@ from alibabacloud_cdn20180510.client import Client as CdnClient
 from alibabacloud_cdn20180510 import models as cdn_models
 from alibabacloud_tea_openapi.models import Config as OpenApiConfig
 
+UPLOAD_TIMEOUT = 300
+CONNECT_TIMEOUT = 120
+PART_SIZE = 10 * 1024 * 1024
+MAX_RETRIES = 5
+RETRY_BASE_DELAY = 10
+
 
 def get_oss_dir(target: str, arch: str) -> str:
     """Derive the OSS directory name from target and arch.
@@ -55,7 +61,10 @@ def main():
     region = os.environ["OSS_REGION"]
     endpoint = f"https://{region}.aliyuncs.com"
     auth = oss2.Auth(os.environ["OSS_ACCESS_KEY_ID"], os.environ["OSS_ACCESS_KEY_SECRET"])
-    bucket = oss2.Bucket(auth, endpoint, os.environ["OSS_BUCKET_NAME"])
+    bucket = oss2.Bucket(
+        auth, endpoint, os.environ["OSS_BUCKET_NAME"],
+        connect_timeout=CONNECT_TIMEOUT,
+    )
 
     images_dir = os.environ.get("OSS_TENBOX_IMAGES_DIR", "tenbox/images").strip("/")
     oss_dir = get_oss_dir(target, arch)
@@ -66,12 +75,22 @@ def main():
     print(f"Uploading {qcow2_path} ({file_size / 1024 / 1024:.1f} MB)")
     print(f"  -> oss://{os.environ['OSS_BUCKET_NAME']}/{oss_key}")
 
-    oss2.resumable_upload(
-        bucket, oss_key, qcow2_path,
-        multipart_threshold=10 * 1024 * 1024,
-        part_size=2 * 1024 * 1024,
-        num_threads=4,
-    )
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            oss2.resumable_upload(
+                bucket, oss_key, qcow2_path,
+                multipart_threshold=10 * 1024 * 1024,
+                part_size=PART_SIZE,
+                num_threads=4,
+            )
+            break
+        except oss2.exceptions.RequestError as e:
+            if attempt == MAX_RETRIES:
+                raise
+            delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            print(f"  Upload attempt {attempt}/{MAX_RETRIES} failed: {e}")
+            print(f"  Retrying in {delay}s ...")
+            time.sleep(delay)
 
     public_url = os.environ.get("OSS_PUBLIC_URL", "").rstrip("/")
     download_url = f"{public_url}/{oss_key}"
